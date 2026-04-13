@@ -1,0 +1,109 @@
+{
+  "version": "1.0",
+  "document_types": {
+
+    "bank_statement": {
+      "label": "Bank / Financial Statement",
+      "template": "bank_statement.html",
+      "data_sheet": "BankStatements",
+      "fields": {
+        "account_number":    { "type": "string",   "required": true,  "mask": "****{{last4}}" },
+        "account_holder":    { "type": "string",   "required": true },
+        "account_type":      { "type": "string",   "required": true,  "allowed": ["Checking","Savings","Credit","Loan"] },
+        "statement_date":    { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "period_from":       { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "period_to":         { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "opening_balance":   { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "closing_balance":   { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "total_credits":     { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "total_debits":      { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "minimum_balance":   { "type": "currency", "required": false, "format": "$#,##0.00" },
+        "interest_rate":     { "type": "percent",  "required": false, "format": "0.00%" },
+        "branch_name":       { "type": "string",   "required": false },
+        "ifsc_code":         { "type": "string",   "required": false },
+        "transactions":      { "type": "list",     "required": true  },
+        "output_filename":   { "type": "string",   "required": false }
+      }
+    },
+
+    "insurance_policy": {
+      "label": "Insurance Policy Document",
+      "template": "insurance_policy.html",
+      "data_sheet": "InsurancePolicies",
+      "fields": {
+        "policy_number":     { "type": "string",   "required": true },
+        "policy_type":       { "type": "string",   "required": true,  "allowed": ["Life","Health","Auto","Property","Liability"] },
+        "insured_name":      { "type": "string",   "required": true },
+        "insured_dob":       { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "insured_address":   { "type": "string",   "required": true },
+        "effective_date":    { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "expiry_date":       { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "premium_amount":    { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "premium_frequency": { "type": "string",   "required": true,  "allowed": ["Monthly","Quarterly","Annual"] },
+        "sum_assured":       { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "deductible":        { "type": "currency", "required": false, "format": "$#,##0.00" },
+        "agent_name":        { "type": "string",   "required": false },
+        "agent_code":        { "type": "string",   "required": false },
+        "coverages":         { "type": "list",     "required": true  },
+        "exclusions":        { "type": "list",     "required": false },
+        "output_filename":   { "type": "string",   "required": false }
+      }
+    },
+
+    "telecom_bill": {
+      "label": "Telecom / Utility Bill",
+      "template": "telecom_bill.html",
+      "data_sheet": "TelecomBills",
+      "fields": {
+        "account_number":    { "type": "string",   "required": true },
+        "customer_name":     { "type": "string",   "required": true },
+        "customer_address":  { "type": "string",   "required": true },
+        "bill_number":       { "type": "string",   "required": true },
+        "bill_date":         { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "due_date":          { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "billing_period":    { "type": "string",   "required": true },
+        "plan_name":         { "type": "string",   "required": true },
+        "data_used_gb":      { "type": "number",   "required": false, "format": "0.00" },
+        "data_limit_gb":     { "type": "number",   "required": false, "format": "0.00" },
+        "calls_minutes":     { "type": "number",   "required": false, "format": "0" },
+        "sms_count":         { "type": "number",   "required": false, "format": "0" },
+        "previous_balance":  { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "current_charges":   { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "taxes_fees":        { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "total_due":         { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "days_overdue":      { "type": "number",   "required": false, "format": "0" },
+        "charges":           { "type": "list",     "required": true  },
+        "output_filename":   { "type": "string",   "required": false }
+      }
+    },
+
+    "payroll_statement": {
+      "label": "HR / Payroll Statement",
+      "template": "payroll_statement.html",
+      "data_sheet": "PayrollStatements",
+      "fields": {
+        "employee_id":       { "type": "string",   "required": true },
+        "employee_name":     { "type": "string",   "required": true },
+        "designation":       { "type": "string",   "required": true },
+        "department":        { "type": "string",   "required": true },
+        "pay_period":        { "type": "string",   "required": true },
+        "pay_date":          { "type": "date",     "required": true,  "format": "DD MMM YYYY" },
+        "bank_account":      { "type": "string",   "required": true,  "mask": "****{{last4}}" },
+        "pan_number":        { "type": "string",   "required": false, "mask": "{{first5}}****{{last1}}" },
+        "basic_salary":      { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "hra":               { "type": "currency", "required": false, "format": "$#,##0.00" },
+        "special_allowance": { "type": "currency", "required": false, "format": "$#,##0.00" },
+        "gross_earnings":    { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "pf_deduction":      { "type": "currency", "required": false, "format": "$#,##0.00" },
+        "tax_deduction":     { "type": "currency", "required": false, "format": "$#,##0.00" },
+        "total_deductions":  { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "net_pay":           { "type": "currency", "required": true,  "format": "$#,##0.00" },
+        "days_worked":       { "type": "number",   "required": false, "format": "0" },
+        "leaves_taken":      { "type": "number",   "required": false, "format": "0" },
+        "earnings":          { "type": "list",     "required": true  },
+        "deductions":        { "type": "list",     "required": true  },
+        "output_filename":   { "type": "string",   "required": false }
+      }
+    }
+  }
+}

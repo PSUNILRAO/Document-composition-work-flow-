@@ -1,0 +1,174 @@
+# rules.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# BUSINESS RULES — Editable by Business Analyst
+# No code changes required. Restart engine to pick up changes.
+# Supports: conditional blocks, field formatting, alerts, thresholds
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "1.0"
+
+# ── Global formatting ─────────────────────────────────────────────────────────
+formatting:
+  currency_symbol: "$"
+  date_locale: "en_US"
+  decimal_separator: "."
+  thousands_separator: ","
+  negative_style: "color:#DC2626;font-weight:bold"
+  positive_style: "color:#166534"
+
+# ── Per-document-type rules ───────────────────────────────────────────────────
+documents:
+
+  bank_statement:
+    conditional_blocks:
+      - id: low_balance_warning
+        show_if: "closing_balance < minimum_balance"
+        severity: warning
+        message: "Your account balance has fallen below the required minimum balance of {minimum_balance}."
+
+      - id: overdraft_alert
+        show_if: "closing_balance < 0"
+        severity: critical
+        message: "Your account is overdrawn. Immediate action required to avoid penalty charges."
+
+      - id: interest_earned
+        show_if: "account_type == 'Savings' and interest_rate > 0"
+        severity: info
+        message: "Interest will be credited at {interest_rate}% per annum on your average monthly balance."
+
+      - id: large_transaction_notice
+        show_if: "any_transaction_above > 10000"
+        severity: info
+        message: "This statement contains one or more transactions exceeding $10,000 as required by regulatory reporting."
+
+    field_styles:
+      closing_balance:
+        - condition: "value < 0"
+          style: "color:#DC2626;font-weight:bold"
+        - condition: "value < minimum_balance"
+          style: "color:#D97706;font-weight:bold"
+        - condition: "value >= minimum_balance"
+          style: "color:#166534;font-weight:bold"
+
+    transaction_styles:
+      - condition: "amount < 0"
+        style: "color:#DC2626"
+      - condition: "amount > 10000"
+        style: "font-weight:bold"
+
+  insurance_policy:
+    conditional_blocks:
+      - id: expiry_warning_90
+        show_if: "days_to_expiry <= 90 and days_to_expiry > 30"
+        severity: warning
+        message: "Your policy expires in {days_to_expiry} days. Please contact your agent to renew."
+
+      - id: expiry_warning_30
+        show_if: "days_to_expiry <= 30 and days_to_expiry > 0"
+        severity: critical
+        message: "URGENT: Your policy expires in {days_to_expiry} days. Renew immediately to avoid lapse."
+
+      - id: policy_expired
+        show_if: "days_to_expiry <= 0"
+        severity: critical
+        message: "This policy has EXPIRED. Coverage is no longer active."
+
+      - id: premium_due
+        show_if: "premium_due == true"
+        severity: warning
+        message: "Premium of {premium_amount} is due. Late payment may affect coverage."
+
+    field_styles:
+      sum_assured:
+        - condition: "value >= 1000000"
+          style: "color:#1E3A5F;font-weight:bold;font-size:13pt"
+
+  telecom_bill:
+    conditional_blocks:
+      - id: overdue_notice_mild
+        show_if: "days_overdue > 0 and days_overdue <= 30"
+        severity: warning
+        message: "Payment of {total_due} is overdue by {days_overdue} days. Please pay immediately to avoid service interruption."
+
+      - id: overdue_notice_severe
+        show_if: "days_overdue > 30"
+        severity: critical
+        message: "FINAL NOTICE: Account overdue by {days_overdue} days. Service may be suspended within 48 hours."
+
+      - id: data_usage_warning
+        show_if: "data_used_gb / data_limit_gb > 0.8"
+        severity: warning
+        message: "You have used {data_pct}% of your monthly data allowance."
+
+      - id: data_exhausted
+        show_if: "data_used_gb >= data_limit_gb"
+        severity: critical
+        message: "Your data allowance is exhausted. Additional usage will be charged at standard rates."
+
+      - id: autopay_reminder
+        show_if: "autopay_enabled == false"
+        severity: info
+        message: "Set up AutoPay to avoid late fees and service interruptions."
+
+    field_styles:
+      total_due:
+        - condition: "value > 500"
+          style: "color:#DC2626;font-weight:bold;font-size:14pt"
+        - condition: "value <= 500"
+          style: "color:#1E3A5F;font-weight:bold;font-size:14pt"
+      days_overdue:
+        - condition: "value > 30"
+          style: "color:#DC2626;font-weight:bold"
+        - condition: "value > 0"
+          style: "color:#D97706;font-weight:bold"
+
+  payroll_statement:
+    conditional_blocks:
+      - id: salary_increment_notice
+        show_if: "increment_applied == true"
+        severity: info
+        message: "Your revised salary is effective from {pay_period}. Please review the updated components."
+
+      - id: tax_advisory
+        show_if: "tax_deduction > 0"
+        severity: info
+        message: "Tax has been deducted at source as per applicable rates. Please retain this payslip for tax filing."
+
+      - id: leave_without_pay
+        show_if: "lwp_days > 0"
+        severity: warning
+        message: "{lwp_days} day(s) of Leave Without Pay have been deducted from this month's salary."
+
+      - id: full_month_bonus
+        show_if: "days_worked == total_working_days"
+        severity: info
+        message: "Attendance bonus applied for full month attendance."
+
+    field_styles:
+      net_pay:
+        - condition: "value > 10000"
+          style: "color:#166534;font-weight:bold;font-size:14pt"
+      tax_deduction:
+        - condition: "value > 0"
+          style: "color:#DC2626"
+
+# ── Audit & compliance rules (apply to all document types) ────────────────────
+global:
+  watermark:
+    enabled: false
+    text: "CONFIDENTIAL"
+    opacity: 0.08
+
+  footer_disclaimer:
+    enabled: true
+    text: "This is a system-generated document. For queries, contact customer service."
+
+  page_numbering:
+    enabled: true
+    format: "Page {page} of {total}"
+    position: bottom-right
+
+  data_masking:
+    account_number: true
+    pan_number: true
+    bank_account: true

@@ -1,0 +1,12 @@
+jinja2>=3.1.0
+flask>=3.0.0
+reportlab>=4.1.0
+openpyxl>=3.1.0
+pyyaml>=6.0.0
+python-docx>=1.1.0
+
+# Optional — significantly better HTML→PDF fidelity:
+# weasyprint>=61.0
+
+# Optional — for nightly scheduling:
+# apscheduler>=3.10.0
