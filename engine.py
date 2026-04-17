@@ -19,9 +19,11 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Callable
 
-from data_loader  import load_record, load_records, get_doc_schema
-from rules_engine import apply_rules
-from renderer     import render_pdf
+from data_loader   import load_record, load_records, get_doc_schema
+from rules_engine  import apply_rules
+from renderer      import render_pdf
+from docx_renderer import (has_uploaded_template, render_docx_pdf,
+                           uploaded_template_path)
 
 log        = logging.getLogger(__name__)
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -89,8 +91,13 @@ def generate_one(doc_type:   str,
         # 2. Apply business rules (alerts, styles, computed fields)
         context = apply_rules(doc_type, record)
 
-        # 3. Render PDF
-        pdf_bytes = render_pdf(doc_type, context)
+        # 3. Render PDF — prefer an uploaded DOCX template if present,
+        #    otherwise fall back to the built-in HTML/Jinja2 pipeline.
+        if has_uploaded_template(doc_type):
+            pdf_bytes = render_docx_pdf(uploaded_template_path(doc_type),
+                                        context)
+        else:
+            pdf_bytes = render_pdf(doc_type, context)
 
         # 4. Determine output filename
         filename = (record.get("output_filename")

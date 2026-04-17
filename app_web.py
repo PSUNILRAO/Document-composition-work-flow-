@@ -19,6 +19,8 @@ from werkzeug.utils import secure_filename
 
 from engine import (generate_one, generate_batch, get_preview_rows,
                     default_data_path, DOC_LABELS, BatchResult)
+from docx_renderer import (UPLOAD_TEMPLATES_DIR, has_uploaded_template,
+                           remove_uploaded_template, uploaded_template_path)
 
 log = logging.getLogger(__name__)
 
@@ -322,6 +324,40 @@ UI = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- DOCX template toolbar -->
+    <div class="card">
+      <div class="card-head">
+        ①½ Document Template
+        <span style="font-weight:400;color:var(--muted);font-size:12px;">
+          {% if docx_template %}
+            Using uploaded DOCX: <code>{{ docx_template }}</code>
+          {% else %}
+            Using built-in HTML template: <code>templates/{{ schema.template }}</code>
+          {% endif %}
+        </span>
+      </div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data"
+              action="/upload-template?type={{ selected }}" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+          <div>
+            <label>Upload DOCX Template</label>
+            <input type="file" name="docxfile" accept=".docx">
+          </div>
+          <button type="submit" class="btn btn-outline">⬆ Upload DOCX</button>
+          {% if docx_template %}
+          <a href="/reset-template?type={{ selected }}{% if active_file %}&file={{ active_file }}{% endif %}"
+             class="btn btn-outline" style="color:var(--muted)"
+             onclick="return confirm('Remove the uploaded DOCX template and revert to the built-in HTML template?')">
+             🗑 Remove DOCX
+          </a>
+          {% endif %}
+          <span style="margin-left:auto;color:var(--muted);font-size:12px;">
+            Placeholders: <code>{{ '{{ field_name }}' }}</code> — e.g. <code>{{ '{{ account_holder }}' }}</code>
+          </span>
+        </form>
+      </div>
+    </div>
+
     <!-- Records table -->
     <div class="card">
       <div class="card-head">
@@ -415,17 +451,21 @@ def index():
     selected    = request.args.get("type", "")
     active_file = request.args.get("file", "")
     rows, cols, schema = [], [], {}
+    docx_template = ""
 
     if selected and selected in DOC_LABELS:
         dp = str(UPLOAD_DIR / active_file) if active_file else None
         rows, cols = get_preview_rows(selected, dp)
         schema = get_doc_schema(selected)
         schema["excel"] = schema.get("data_sheet", selected)
+        if has_uploaded_template(selected):
+            docx_template = uploaded_template_path(selected).name
 
     return render_template_string(
         UI,
         doc_labels=DOC_LABELS, selected=selected,
         active_file=active_file, rows=rows, cols=cols, schema=schema,
+        docx_template=docx_template,
     )
 
 
@@ -460,6 +500,63 @@ def upload():
     f.save(str(save_p))
     flash(f"Uploaded '{safe_name}'.", "success")
     return redirect(f"/?type={doc_type}&file={safe_name}")
+
+
+def _safe_active_file(active_file: str) -> str:
+    """Return ``active_file`` verbatim if it resolves inside ``UPLOAD_DIR``;
+    otherwise return ``""``. Used when threading the ``&file=`` query param
+    through redirects so an attacker cannot inject arbitrary values into the
+    ``Location`` header by crafting the parameter.
+    """
+    if not active_file:
+        return ""
+    return active_file if _safe_upload_path(active_file) is not None else ""
+
+
+@app.route("/upload-template", methods=["POST"])
+def upload_template():
+    """Accept a .docx template for the selected doc_type and store it under
+    uploads/templates/<doc_type>.docx. Subsequent /generate calls will use this
+    DOCX template (with Jinja2 placeholder substitution) instead of the
+    built-in HTML template."""
+    doc_type    = request.args.get("type", "")
+    active_file = _safe_active_file(request.args.get("file", ""))
+    if doc_type not in DOC_LABELS:
+        flash(f"Unknown document type '{doc_type}'.", "error")
+        return redirect("/")
+    f = request.files.get("docxfile")
+    if not f or not f.filename:
+        flash("No DOCX file chosen.", "error")
+        return redirect(f"/?type={doc_type}&file={active_file}")
+
+    # Use a sanitised display name for flashes/logging so user-controlled
+    # characters (path separators, HTML, etc.) can't surface in UI chrome.
+    display_name = secure_filename(f.filename) or "uploaded.docx"
+    if not f.filename.lower().endswith(".docx"):
+        flash("Only .docx files accepted for templates.", "error")
+        return redirect(f"/?type={doc_type}&file={active_file}")
+    dest = uploaded_template_path(doc_type)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    f.save(str(dest))
+    flash(
+        f"Uploaded DOCX template '{display_name}' for {DOC_LABELS[doc_type]}.",
+        "success",
+    )
+    return redirect(f"/?type={doc_type}&file={active_file}")
+
+
+@app.route("/reset-template")
+def reset_template():
+    doc_type    = request.args.get("type", "")
+    active_file = _safe_active_file(request.args.get("file", ""))
+    if doc_type not in DOC_LABELS:
+        flash(f"Unknown document type '{doc_type}'.", "error")
+        return redirect("/")
+    if remove_uploaded_template(doc_type):
+        flash("Reverted to built-in HTML template.", "success")
+    else:
+        flash("No uploaded DOCX template to remove.", "info")
+    return redirect(f"/?type={doc_type}&file={active_file}")
 
 
 @app.route("/generate")

@@ -1,0 +1,9 @@
+# Generated at runtime / by setup_and_run.py
+__pycache__/
+*.pyc
+/data/
+/output/
+/uploads/
+/templates/
+/logs/
+/tests/golden/
