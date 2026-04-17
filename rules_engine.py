@@ -10,6 +10,8 @@ Produces:
 No HTML or PDF logic here — pure rule evaluation.
 """
 
+import ast
+import operator as _op
 import re
 import logging
 from pathlib import Path
@@ -39,39 +41,135 @@ def reload_rules():
 
 
 # ── Safe expression evaluator ─────────────────────────────────────────────────
+#
+# The previous implementation used `eval()` on a string built from the YAML
+# rules. `__builtins__={}` is a well-known incomplete sandbox (attackers can
+# escape via `().__class__.__mro__[...]`), so we replaced it with a strict
+# AST walker that only accepts the operators actually used in rules.yaml:
+#
+#   ==  !=  <  <=  >  >=  in  not in
+#   and  or  not
+#   unary +/-
+#   identifier lookups against the supplied context
+#   literal constants (numbers, strings, True/False/None)
+#
+# Anything else — function calls, attribute access, subscripts, imports,
+# comprehensions, lambdas, etc. — causes the expression to evaluate to False.
+
+_ALLOWED_CMPOPS: dict[type, object] = {
+    ast.Eq:    _op.eq,
+    ast.NotEq: _op.ne,
+    ast.Lt:    _op.lt,
+    ast.LtE:   _op.le,
+    ast.Gt:    _op.gt,
+    ast.GtE:   _op.ge,
+    ast.In:    lambda a, b: a in b,
+    ast.NotIn: lambda a, b: a not in b,
+}
+_ALLOWED_UNARYOPS: dict[type, object] = {
+    ast.USub: _op.neg,
+    ast.UAdd: _op.pos,
+    ast.Not:  _op.not_,
+}
+
+# YAML-style lowercase booleans / none supported for convenience.
+_EXTRA_NAMES = {
+    "true":  True,  "True":  True,
+    "false": False, "False": False,
+    "null":  None,  "None":  None,
+}
+
+
+def _coerce_for_compare(left, right):
+    """If one side of a comparison is numeric-looking, coerce both to float."""
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left, right
+    try:
+        return float(left), float(right)
+    except (TypeError, ValueError):
+        return left, right
+
+
 def _safe_eval(expr: str, context: dict) -> bool:
     """
     Evaluate a simple boolean expression string against the context dict.
-    Supports: ==, !=, >, <, >=, <=, and, or, not, true, false
-    No exec/eval — uses a restricted evaluator for security.
+    Returns False for any disallowed construct or runtime error.
     """
-    # Substitute field references with their values
-    def _lookup(match):
-        key = match.group(0)
-        val = context.get(key)
-        if val is None:
-            return "0"
-        if isinstance(val, bool):
-            return "True" if val else "False"
-        if isinstance(val, str):
-            return f'"{val}"'
-        return str(val)
+    if not isinstance(expr, str):
+        return bool(expr)
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        log.debug("Rule syntax error: %r", expr)
+        return False
 
-    # Replace identifiers that exist in context
-    expr_sub = re.sub(
-        r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b',
-        lambda m: _lookup(m) if m.group(0) in context else m.group(0),
-        expr,
-    )
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
 
-    # Replace YAML-style true/false
-    expr_sub = expr_sub.replace("true", "True").replace("false", "False")
+        if isinstance(node, ast.Constant):
+            return node.value
+
+        if isinstance(node, ast.Name):
+            name = node.id
+            if name in _EXTRA_NAMES:
+                return _EXTRA_NAMES[name]
+            if name in context:
+                val = context[name]
+                # Preserve the previous behaviour of treating missing
+                # numeric values as 0 for comparisons.
+                return 0 if val is None else val
+            # Unknown identifier — surface as None; comparisons then fail.
+            return None
+
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_UNARYOPS:
+            return _ALLOWED_UNARYOPS[type(node.op)](_eval(node.operand))
+
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                result = True
+                for child in node.values:
+                    result = result and _eval(child)
+                    if not result:
+                        break
+                return result
+            if isinstance(node.op, ast.Or):
+                result = False
+                for child in node.values:
+                    result = result or _eval(child)
+                    if result:
+                        break
+                return result
+            raise ValueError("boolean op not allowed")
+
+        if isinstance(node, ast.Compare):
+            left = _eval(node.left)
+            for op_node, comparator in zip(node.ops, node.comparators):
+                op_type = type(op_node)
+                if op_type not in _ALLOWED_CMPOPS:
+                    raise ValueError(f"comparison operator not allowed: {op_type.__name__}")
+                right = _eval(comparator)
+                fn = _ALLOWED_CMPOPS[op_type]
+                try:
+                    ok = fn(left, right)
+                except TypeError:
+                    # e.g. comparing str with int — coerce numerically if possible.
+                    l2, r2 = _coerce_for_compare(left, right)
+                    try:
+                        ok = fn(l2, r2)
+                    except TypeError:
+                        return False
+                if not ok:
+                    return False
+                left = right
+            return True
+
+        raise ValueError(f"disallowed expression node: {type(node).__name__}")
 
     try:
-        allowed_names = {"True": True, "False": False, "__builtins__": {}}
-        return bool(eval(expr_sub, allowed_names))  # noqa: S307
+        return bool(_eval(tree))
     except Exception as exc:
-        log.debug("Rule eval failed for '%s': %s", expr, exc)
+        log.debug("Rule eval failed for %r: %s", expr, exc)
         return False
 
 
