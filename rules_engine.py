@@ -22,6 +22,12 @@ import yaml
 log = logging.getLogger(__name__)
 
 RULES_PATH = Path(__file__).parent / "config" / "rules.yaml"
+# Backwards-compatibility: rules.yaml used to live at the repo root; fall back
+# to that location when the config/ directory is not present.
+if not RULES_PATH.exists():
+    _root_rules = Path(__file__).parent / "rules.yaml"
+    if _root_rules.exists():
+        RULES_PATH = _root_rules
 _rules_cache: dict | None = None
 
 
