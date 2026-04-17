@@ -7,19 +7,64 @@ Serves the document generation studio at http://localhost:5000
 
 import io
 import json
+import logging
+import os
+import secrets
 import threading
 from pathlib import Path
 from flask import (Flask, render_template_string, request,
-                   send_file, jsonify, redirect, url_for, flash)
+                   send_file, jsonify, redirect, url_for, flash,
+                   abort)
+from werkzeug.utils import secure_filename
 
 from engine import (generate_one, generate_batch, get_preview_rows,
                     default_data_path, DOC_LABELS, BatchResult)
 
+log = logging.getLogger(__name__)
+
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+_UPLOAD_DIR_RESOLVED = UPLOAD_DIR.resolve()
+
+ALLOWED_UPLOAD_EXTS = frozenset({".xlsx", ".csv"})
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MiB
 
 app = Flask(__name__)
-app.secret_key = "docgen-2026-secret"
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+
+# Use FLASK_SECRET_KEY from the environment in production. If unset, generate
+# a random key at startup so the secret is never committed to source control.
+# Sessions signed with a random key don't survive a restart — acceptable for
+# this single-user generator app, and safer than a hard-coded secret.
+_env_secret = os.environ.get("FLASK_SECRET_KEY")
+if _env_secret:
+    app.secret_key = _env_secret
+else:
+    app.secret_key = secrets.token_hex(32)
+    log.warning(
+        "FLASK_SECRET_KEY is not set; using an ephemeral random key. "
+        "Set FLASK_SECRET_KEY in the environment for stable sessions."
+    )
+
+
+def _safe_upload_path(user_supplied_name: str) -> Path | None:
+    """Resolve an uploads-relative filename to an absolute path within UPLOAD_DIR.
+
+    Returns None if the name is empty, contains a path separator after
+    basename stripping, or resolves outside of UPLOAD_DIR (path traversal).
+    """
+    if not user_supplied_name:
+        return None
+    # Only accept a basename — never honour directory components from the client.
+    name = os.path.basename(user_supplied_name)
+    if not name or name in (".", ".."):
+        return None
+    candidate = (UPLOAD_DIR / name).resolve()
+    try:
+        candidate.relative_to(_UPLOAD_DIR_RESOLVED)
+    except ValueError:
+        return None
+    return candidate
 
 # In-memory batch progress tracker
 _batch_progress: dict = {}
@@ -383,23 +428,56 @@ def index():
 @app.route("/upload", methods=["POST"])
 def upload():
     doc_type = request.args.get("type", "")
+    if doc_type and doc_type not in DOC_LABELS:
+        flash("Unknown document type.", "error")
+        return redirect("/")
+
     f = request.files.get("datafile")
-    if not f or f.filename == "":
-        flash("No file chosen.", "error"); return redirect(f"/?type={doc_type}")
-    if not f.filename.endswith((".xlsx", ".csv")):
-        flash("Only .xlsx and .csv files accepted.", "error"); return redirect(f"/?type={doc_type}")
-    save_p = UPLOAD_DIR / f.filename
+    if not f or not f.filename:
+        flash("No file chosen.", "error")
+        return redirect(f"/?type={doc_type}")
+
+    # secure_filename strips directory traversal and dangerous characters.
+    safe_name = secure_filename(f.filename)
+    if not safe_name:
+        flash("Invalid filename.", "error")
+        return redirect(f"/?type={doc_type}")
+
+    ext = os.path.splitext(safe_name)[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTS:
+        flash("Only .xlsx and .csv files accepted.", "error")
+        return redirect(f"/?type={doc_type}")
+
+    save_p = _safe_upload_path(safe_name)
+    if save_p is None:
+        flash("Invalid filename.", "error")
+        return redirect(f"/?type={doc_type}")
+
     f.save(str(save_p))
-    flash(f"Uploaded '{f.filename}'.", "success")
-    return redirect(f"/?type={doc_type}&file={f.filename}")
+    flash(f"Uploaded '{safe_name}'.", "success")
+    return redirect(f"/?type={doc_type}&file={safe_name}")
 
 
 @app.route("/generate")
 def generate():
     doc_type    = request.args.get("type", "")
-    row_index   = int(request.args.get("row", 0))
+    if doc_type not in DOC_LABELS:
+        abort(400, "Unknown document type.")
+    try:
+        row_index = int(request.args.get("row", 0))
+    except (TypeError, ValueError):
+        abort(400, "Invalid row index.")
+    if row_index < 0:
+        abort(400, "Invalid row index.")
+
     active_file = request.args.get("file", "")
-    dp = str(UPLOAD_DIR / active_file) if active_file else None
+    dp: str | None = None
+    if active_file:
+        safe_path = _safe_upload_path(active_file)
+        if safe_path is None or not safe_path.is_file():
+            abort(400, "Invalid or unknown data file.")
+        dp = str(safe_path)
+
     result = generate_one(doc_type, row_index, dp, save=True)
     if result.success:
         return send_file(
@@ -415,8 +493,16 @@ def generate():
 @app.route("/generate-all")
 def generate_all():
     doc_type    = request.args.get("type", "")
+    if doc_type not in DOC_LABELS:
+        abort(400, "Unknown document type.")
+
     active_file = request.args.get("file", "")
-    dp = str(UPLOAD_DIR / active_file) if active_file else None
+    dp: str | None = None
+    if active_file:
+        safe_path = _safe_upload_path(active_file)
+        if safe_path is None or not safe_path.is_file():
+            abort(400, "Invalid or unknown data file.")
+        dp = str(safe_path)
 
     job_id = f"{doc_type}_{int(time.time())}"
     _batch_progress[job_id] = {"done": 0, "total": 0, "status": "running"}
@@ -487,4 +573,9 @@ if __name__ == "__main__":
     print("  Open: http://localhost:5000")
     print("  Ctrl+C to stop")
     print("="*58 + "\n")
-    app.run(debug=True, port=5000, threaded=True)
+    # Debug mode enables the Werkzeug interactive debugger (RCE if reachable).
+    # Keep it off by default; opt in explicitly via FLASK_DEBUG=1.
+    debug_mode = os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true", "yes")
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    port = int(os.environ.get("FLASK_PORT", "5000"))
+    app.run(host=host, port=port, debug=debug_mode, threaded=True)
