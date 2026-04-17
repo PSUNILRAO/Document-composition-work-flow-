@@ -20,6 +20,12 @@ log = logging.getLogger(__name__)
 
 CONFIG_DIR  = Path(__file__).parent / "config"
 SCHEMA_PATH = CONFIG_DIR / "schema.json"
+# Backwards-compatibility: schema.json used to live at the repo root; fall back
+# to that location when the config/ directory is not present.
+if not SCHEMA_PATH.exists():
+    _root_schema = Path(__file__).parent / "schema.json"
+    if _root_schema.exists():
+        SCHEMA_PATH = _root_schema
 
 
 # ── Schema loader ─────────────────────────────────────────────────────────────

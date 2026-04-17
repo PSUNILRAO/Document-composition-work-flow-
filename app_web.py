@@ -357,6 +357,10 @@ def _truncate(s, n=28):
     return s if len(s) <= n else s[:n-1] + "…"
 
 app.jinja_env.globals["enumerate"] = _b.enumerate
+# The UI template uses ``rows|enumerate`` as a filter, so expose ``enumerate``
+# as a Jinja filter too. Without this the records table renders a
+# ``TemplateRuntimeError: No filter named 'enumerate' found``.
+app.jinja_env.filters["enumerate"] = _b.enumerate
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
