@@ -502,6 +502,17 @@ def upload():
     return redirect(f"/?type={doc_type}&file={safe_name}")
 
 
+def _safe_active_file(active_file: str) -> str:
+    """Return ``active_file`` verbatim if it resolves inside ``UPLOAD_DIR``;
+    otherwise return ``""``. Used when threading the ``&file=`` query param
+    through redirects so an attacker cannot inject arbitrary values into the
+    ``Location`` header by crafting the parameter.
+    """
+    if not active_file:
+        return ""
+    return active_file if _safe_upload_path(active_file) is not None else ""
+
+
 @app.route("/upload-template", methods=["POST"])
 def upload_template():
     """Accept a .docx template for the selected doc_type and store it under
@@ -509,29 +520,38 @@ def upload_template():
     DOCX template (with Jinja2 placeholder substitution) instead of the
     built-in HTML template."""
     doc_type    = request.args.get("type", "")
-    active_file = request.args.get("file", "")
+    active_file = _safe_active_file(request.args.get("file", ""))
     if doc_type not in DOC_LABELS:
         flash(f"Unknown document type '{doc_type}'.", "error")
         return redirect("/")
     f = request.files.get("docxfile")
-    if not f or f.filename == "":
+    if not f or not f.filename:
         flash("No DOCX file chosen.", "error")
         return redirect(f"/?type={doc_type}&file={active_file}")
+
+    # Use a sanitised display name for flashes/logging so user-controlled
+    # characters (path separators, HTML, etc.) can't surface in UI chrome.
+    display_name = secure_filename(f.filename) or "uploaded.docx"
     if not f.filename.lower().endswith(".docx"):
         flash("Only .docx files accepted for templates.", "error")
         return redirect(f"/?type={doc_type}&file={active_file}")
     dest = uploaded_template_path(doc_type)
     dest.parent.mkdir(parents=True, exist_ok=True)
     f.save(str(dest))
-    flash(f"Uploaded DOCX template '{f.filename}' for {DOC_LABELS[doc_type]}.",
-          "success")
+    flash(
+        f"Uploaded DOCX template '{display_name}' for {DOC_LABELS[doc_type]}.",
+        "success",
+    )
     return redirect(f"/?type={doc_type}&file={active_file}")
 
 
 @app.route("/reset-template")
 def reset_template():
     doc_type    = request.args.get("type", "")
-    active_file = request.args.get("file", "")
+    active_file = _safe_active_file(request.args.get("file", ""))
+    if doc_type not in DOC_LABELS:
+        flash(f"Unknown document type '{doc_type}'.", "error")
+        return redirect("/")
     if remove_uploaded_template(doc_type):
         flash("Reverted to built-in HTML template.", "success")
     else:

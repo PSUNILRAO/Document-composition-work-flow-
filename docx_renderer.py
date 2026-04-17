@@ -29,7 +29,7 @@ from docx.document import Document as _DocxDocument
 from docx.oxml.ns import qn
 from docx.table import Table as _DocxTable
 from docx.text.paragraph import Paragraph as _DocxParagraph
-from jinja2 import Environment, StrictUndefined, Undefined
+from jinja2 import Environment, Undefined
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
@@ -77,19 +77,56 @@ _install_shared_filters()
 
 
 # ── Template-path helpers ─────────────────────────────────────────────────────
+_UPLOAD_TEMPLATES_DIR_RESOLVED = UPLOAD_TEMPLATES_DIR.resolve()
+
+
+def _safe_template_path(doc_type: str) -> Path | None:
+    """Resolve the DOCX template path for ``doc_type``.
+
+    Returns ``None`` if ``doc_type`` is empty, contains path separators, or
+    would resolve outside of :data:`UPLOAD_TEMPLATES_DIR`. This is
+    defense-in-depth: callers are expected to have already validated
+    ``doc_type`` against an allow-list, but hardening here ensures these
+    helpers cannot be used to reach arbitrary filesystem paths if any caller
+    forgets to validate.
+    """
+    if not doc_type or not isinstance(doc_type, str):
+        return None
+    # Reject anything that isn't a plain identifier-ish name. This is stricter
+    # than the allow-list check (which is exact-match against DOC_LABELS) but
+    # guarantees no traversal or separator characters can reach the filesystem.
+    if doc_type in (".", "..") or any(c in doc_type for c in ("/", "\\", "\x00")):
+        return None
+    candidate = (UPLOAD_TEMPLATES_DIR / f"{doc_type}.docx").resolve()
+    try:
+        candidate.relative_to(_UPLOAD_TEMPLATES_DIR_RESOLVED)
+    except ValueError:
+        return None
+    return candidate
+
+
 def uploaded_template_path(doc_type: str) -> Path:
-    """Where we store the uploaded DOCX for a given doc_type."""
-    return UPLOAD_TEMPLATES_DIR / f"{doc_type}.docx"
+    """Where we store the uploaded DOCX for a given doc_type.
+
+    Raises ``ValueError`` if ``doc_type`` would resolve outside of
+    :data:`UPLOAD_TEMPLATES_DIR`. Callers that want a soft-failing check should
+    use :func:`has_uploaded_template` (which returns ``False`` instead).
+    """
+    safe = _safe_template_path(doc_type)
+    if safe is None:
+        raise ValueError(f"Invalid doc_type for template path: {doc_type!r}")
+    return safe
 
 
 def has_uploaded_template(doc_type: str) -> bool:
-    return uploaded_template_path(doc_type).is_file()
+    safe = _safe_template_path(doc_type)
+    return safe is not None and safe.is_file()
 
 
 def remove_uploaded_template(doc_type: str) -> bool:
-    p = uploaded_template_path(doc_type)
-    if p.is_file():
-        p.unlink()
+    safe = _safe_template_path(doc_type)
+    if safe is not None and safe.is_file():
+        safe.unlink()
         return True
     return False
 
