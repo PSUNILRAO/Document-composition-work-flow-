@@ -14,6 +14,8 @@ from flask import (Flask, render_template_string, request,
 
 from engine import (generate_one, generate_batch, get_preview_rows,
                     default_data_path, DOC_LABELS, BatchResult)
+from docx_renderer import (UPLOAD_TEMPLATES_DIR, has_uploaded_template,
+                           remove_uploaded_template, uploaded_template_path)
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -277,6 +279,40 @@ UI = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- DOCX template toolbar -->
+    <div class="card">
+      <div class="card-head">
+        ①½ Document Template
+        <span style="font-weight:400;color:var(--muted);font-size:12px;">
+          {% if docx_template %}
+            Using uploaded DOCX: <code>{{ docx_template }}</code>
+          {% else %}
+            Using built-in HTML template: <code>templates/{{ schema.template }}</code>
+          {% endif %}
+        </span>
+      </div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data"
+              action="/upload-template?type={{ selected }}" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+          <div>
+            <label>Upload DOCX Template</label>
+            <input type="file" name="docxfile" accept=".docx">
+          </div>
+          <button type="submit" class="btn btn-outline">⬆ Upload DOCX</button>
+          {% if docx_template %}
+          <a href="/reset-template?type={{ selected }}{% if active_file %}&file={{ active_file }}{% endif %}"
+             class="btn btn-outline" style="color:var(--muted)"
+             onclick="return confirm('Remove the uploaded DOCX template and revert to the built-in HTML template?')">
+             🗑 Remove DOCX
+          </a>
+          {% endif %}
+          <span style="margin-left:auto;color:var(--muted);font-size:12px;">
+            Placeholders: <code>{{ '{{ field_name }}' }}</code> — e.g. <code>{{ '{{ account_holder }}' }}</code>
+          </span>
+        </form>
+      </div>
+    </div>
+
     <!-- Records table -->
     <div class="card">
       <div class="card-head">
@@ -357,6 +393,8 @@ def _truncate(s, n=28):
     return s if len(s) <= n else s[:n-1] + "…"
 
 app.jinja_env.globals["enumerate"] = _b.enumerate
+# `rows|enumerate` in the records table uses enumerate as a filter, so register it there too.
+app.jinja_env.filters["enumerate"] = _b.enumerate
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -366,17 +404,21 @@ def index():
     selected    = request.args.get("type", "")
     active_file = request.args.get("file", "")
     rows, cols, schema = [], [], {}
+    docx_template = ""
 
     if selected and selected in DOC_LABELS:
         dp = str(UPLOAD_DIR / active_file) if active_file else None
         rows, cols = get_preview_rows(selected, dp)
         schema = get_doc_schema(selected)
         schema["excel"] = schema.get("data_sheet", selected)
+        if has_uploaded_template(selected):
+            docx_template = uploaded_template_path(selected).name
 
     return render_template_string(
         UI,
         doc_labels=DOC_LABELS, selected=selected,
         active_file=active_file, rows=rows, cols=cols, schema=schema,
+        docx_template=docx_template,
     )
 
 
@@ -392,6 +434,43 @@ def upload():
     f.save(str(save_p))
     flash(f"Uploaded '{f.filename}'.", "success")
     return redirect(f"/?type={doc_type}&file={f.filename}")
+
+
+@app.route("/upload-template", methods=["POST"])
+def upload_template():
+    """Accept a .docx template for the selected doc_type and store it under
+    uploads/templates/<doc_type>.docx. Subsequent /generate calls will use this
+    DOCX template (with Jinja2 placeholder substitution) instead of the
+    built-in HTML template."""
+    doc_type    = request.args.get("type", "")
+    active_file = request.args.get("file", "")
+    if doc_type not in DOC_LABELS:
+        flash(f"Unknown document type '{doc_type}'.", "error")
+        return redirect("/")
+    f = request.files.get("docxfile")
+    if not f or f.filename == "":
+        flash("No DOCX file chosen.", "error")
+        return redirect(f"/?type={doc_type}&file={active_file}")
+    if not f.filename.lower().endswith(".docx"):
+        flash("Only .docx files accepted for templates.", "error")
+        return redirect(f"/?type={doc_type}&file={active_file}")
+    dest = uploaded_template_path(doc_type)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    f.save(str(dest))
+    flash(f"Uploaded DOCX template '{f.filename}' for {DOC_LABELS[doc_type]}.",
+          "success")
+    return redirect(f"/?type={doc_type}&file={active_file}")
+
+
+@app.route("/reset-template")
+def reset_template():
+    doc_type    = request.args.get("type", "")
+    active_file = request.args.get("file", "")
+    if remove_uploaded_template(doc_type):
+        flash("Reverted to built-in HTML template.", "success")
+    else:
+        flash("No uploaded DOCX template to remove.", "info")
+    return redirect(f"/?type={doc_type}&file={active_file}")
 
 
 @app.route("/generate")
