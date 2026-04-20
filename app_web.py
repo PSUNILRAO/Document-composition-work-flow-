@@ -21,6 +21,8 @@ from engine import (generate_one, generate_batch, get_preview_rows,
                     default_data_path, DOC_LABELS, BatchResult)
 from docx_renderer import (UPLOAD_TEMPLATES_DIR, has_uploaded_template,
                            remove_uploaded_template, uploaded_template_path)
+from template_studio import (bindings_exist, extract_placeholders,
+                             load_bindings, remove_bindings, save_bindings)
 
 log = logging.getLogger(__name__)
 
@@ -251,6 +253,9 @@ UI = """<!DOCTYPE html>
     {% endfor %}
 
     <div class="nav-section" style="margin-top:20px;">TOOLS</div>
+    <a href="/studio{% if selected %}?type={{ selected }}{% endif %}" class="nav-item">
+      <span class="icon">🎨</span> Template Studio
+    </a>
     <a href="/batch-status" class="nav-item">
       <span class="icon">⚙</span> Batch Status
     </a>
@@ -345,6 +350,10 @@ UI = """<!DOCTYPE html>
           </div>
           <button type="submit" class="btn btn-outline">⬆ Upload DOCX</button>
           {% if docx_template %}
+          <a href="/studio?type={{ selected }}{% if active_file %}&file={{ active_file }}{% endif %}"
+             class="btn btn-primary">
+             🎨 Open Template Studio →
+          </a>
           <a href="/reset-template?type={{ selected }}{% if active_file %}&file={{ active_file }}{% endif %}"
              class="btn btn-outline" style="color:var(--muted)"
              onclick="return confirm('Remove the uploaded DOCX template and revert to the built-in HTML template?')">
@@ -625,6 +634,669 @@ def generate_all():
 
 
 import time
+
+STUDIO_UI = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Template Studio · {{ doc_label }}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap');
+  :root {
+    --ink:#0D1117; --paper:#F6F8FA; --primary:#0969DA; --primary-d:#0550AE;
+    --border:#D0D7DE; --surface:#FFFFFF; --muted:#57606A;
+    --success:#1A7F37; --warn:#9A6700; --danger:#CF222E;
+    --info-bg:#DDF4FF; --info:#0550AE; --success-bg:#DAFBE1;
+    --warn-bg:#FFF8C5; --danger-bg:#FFEBE9;
+    --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:var(--sans); background:var(--paper); color:var(--ink); font-size:14px; }
+  .topbar { background:var(--ink); color:#fff; padding:0 28px; height:52px;
+            display:flex; align-items:center; gap:16px; border-bottom:1px solid #30363D; }
+  .topbar .logo { font-weight:700; font-size:15px; letter-spacing:.3px; }
+  .topbar .tag { font-size:11px; background:#21262D; color:#8B949E;
+                 padding:2px 8px; border-radius:10px; font-family:var(--mono); }
+  .topbar a { color:#8B949E; font-size:12px; text-decoration:none; }
+  .topbar a:hover { color:#fff; }
+
+  .wrap { padding:24px 32px; max-width:1400px; }
+  .page-title { font-size:20px; font-weight:700; margin-bottom:4px; }
+  .page-sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+
+  .card { background:var(--surface); border:1px solid var(--border);
+          border-radius:8px; margin-bottom:20px; overflow:hidden; }
+  .card-head { padding:12px 18px; border-bottom:1px solid var(--border);
+               font-weight:600; font-size:13px; background:var(--paper);
+               display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .card-body { padding:18px; }
+
+  .btn { display:inline-flex; align-items:center; gap:6px;
+         padding:7px 14px; border-radius:6px; font-size:13px;
+         font-weight:600; cursor:pointer; border:1px solid transparent;
+         text-decoration:none; font-family:var(--sans); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-primary { background:var(--primary); color:#fff; border-color:var(--primary-d); }
+  .btn-primary:hover { background:var(--primary-d); }
+  .btn-outline { background:var(--surface); color:var(--ink); border-color:var(--border); }
+  .btn-outline:hover { background:var(--paper); }
+  .btn-danger { background:var(--danger); color:#fff; border-color:#A40E26; }
+  .btn-sm { padding:4px 10px; font-size:12px; }
+
+  .alert { padding:10px 14px; border-radius:6px; font-size:13px;
+           margin-bottom:16px; }
+  .alert-success { background:var(--success-bg); color:var(--success); border:1px solid #ACEEBB; }
+  .alert-error   { background:var(--danger-bg);  color:var(--danger);  border:1px solid #FFCECB; }
+  .alert-info    { background:var(--info-bg);    color:var(--info);    border:1px solid #B6E3FF; }
+  .alert-warn    { background:var(--warn-bg);    color:var(--warn);    border:1px solid #F1E05A; }
+
+  code, .mono { font-family:var(--mono); font-size:12px; }
+  .muted { color:var(--muted); }
+
+  /* Mapping grid */
+  .map-grid { display:grid; grid-template-columns: 1fr 1fr; gap:20px; align-items:start; }
+  .panel { background:var(--surface); border:1px solid var(--border);
+           border-radius:8px; padding:0; }
+  .panel-head { padding:10px 14px; border-bottom:1px solid var(--border);
+                font-weight:600; font-size:12px; letter-spacing:.4px;
+                color:var(--muted); text-transform:uppercase;
+                background:var(--paper); display:flex; justify-content:space-between; }
+  .panel-body { padding:10px; min-height:80px; }
+
+  .field, .ph {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 10px; margin-bottom:6px; border-radius:6px;
+    border:1px solid var(--border); background:var(--surface);
+    font-family:var(--mono); font-size:12px;
+  }
+  .field { cursor:grab; }
+  .field:active { cursor:grabbing; }
+  .field[draggable="true"]:hover { background:var(--info-bg); border-color:var(--primary); }
+  .field .ftype { font-size:10px; color:var(--muted); background:var(--paper);
+                  padding:1px 6px; border-radius:10px; }
+
+  .ph { flex-wrap:wrap; }
+  .ph .name { flex:0 0 auto; font-weight:600; color:var(--ink); }
+  .ph .binding {
+    flex:1 1 auto; margin-left:10px; padding:4px 8px;
+    border:1px dashed var(--border); border-radius:4px;
+    min-height:26px; display:flex; align-items:center; justify-content:space-between;
+    background:var(--paper); color:var(--muted);
+  }
+  .ph .binding.bound   { background:var(--success-bg); color:var(--success);
+                         border:1px solid #ACEEBB; border-style:solid; font-weight:600; }
+  .ph .binding.drop-ok { background:var(--info-bg); border-color:var(--primary); color:var(--info); }
+  .ph .clear-btn { background:none; border:none; color:var(--muted);
+                   cursor:pointer; font-size:16px; padding:0 0 0 6px; line-height:1; }
+  .ph .clear-btn:hover { color:var(--danger); }
+
+  .repeating { border:1px solid var(--border); border-radius:8px;
+               padding:14px; margin-bottom:14px; background:var(--surface); }
+  .repeating h4 { font-size:13px; margin-bottom:8px; }
+  .repeating .source-row { display:flex; align-items:center; gap:8px;
+                            margin-bottom:10px; flex-wrap:wrap; }
+  .repeating select { border:1px solid var(--border); border-radius:6px;
+                      padding:5px 8px; font-size:13px; font-family:var(--sans);
+                      background:var(--surface); min-width:220px; }
+  .repeating .inner-grid { display:grid;
+                           grid-template-columns:auto 1fr; gap:6px 10px;
+                           align-items:center; font-family:var(--mono); font-size:12px; }
+  .repeating .inner-grid select { font-family:var(--mono); font-size:12px; min-width:180px; }
+
+  .preview-row { display:flex; align-items:center; gap:10px; }
+  .preview-row select, .preview-row input {
+    border:1px solid var(--border); border-radius:6px;
+    padding:6px 10px; font-size:13px; font-family:var(--sans);
+    background:var(--surface);
+  }
+
+  .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+                background:var(--muted); margin-right:6px; }
+  .status-dot.saved { background:var(--success); }
+  .status-dot.dirty { background:var(--warn); }
+
+  .empty { padding:24px; text-align:center; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">🎨 Template Studio</div>
+  <div class="tag">DOCX · PLACEHOLDERS · BINDINGS</div>
+  <a href="/{% if selected %}?type={{ selected }}{% if active_file %}&file={{ active_file }}{% endif %}{% endif %}"
+     style="margin-left:auto;">← Back to Studio</a>
+</div>
+
+<div class="wrap">
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }}">{{ msg }}</div>
+  {% endfor %}
+  {% endwith %}
+
+  <div class="page-title">{{ doc_label }}</div>
+  <div class="page-sub">
+    Template: <code>{% if docx_template %}uploads/templates/{{ docx_template }}{% else %}— no DOCX uploaded —{% endif %}</code>
+    &nbsp;·&nbsp; Data: <code>{{ active_file or 'default' }}</code>
+  </div>
+
+  {% if not selected or selected not in doc_labels %}
+    <div class="alert alert-info">
+      Pick a document type to open the Studio.
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        {% for k, v in doc_labels.items() %}
+        <a href="/studio?type={{ k }}" class="btn btn-outline btn-sm">{{ v }}</a>
+        {% endfor %}
+      </div>
+    </div>
+  {% elif not docx_template %}
+    <div class="card">
+      <div class="card-head">Upload a DOCX mock-up to begin</div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data"
+              action="/upload-template?type={{ selected }}{% if active_file %}&file={{ active_file }}{% endif %}"
+              style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          <input type="file" name="docxfile" accept=".docx" required>
+          <button type="submit" class="btn btn-primary">⬆ Upload DOCX</button>
+          <span class="muted" style="font-size:12px;">
+            Word placeholders use <code>{{ '{{ field_name }}' }}</code> and
+            <code>{{ '{% for row in transactions %}...{% endfor %}' }}</code>.
+          </span>
+        </form>
+      </div>
+    </div>
+  {% else %}
+
+    <!-- Preview + actions bar -->
+    <div class="card">
+      <div class="card-head">
+        <span><span id="status-dot" class="status-dot"></span>
+              <span id="status-label">Loading…</span></span>
+        <span style="display:flex;gap:8px;">
+          <button id="save-btn" class="btn btn-primary" disabled>💾 Save bindings</button>
+          <button id="reset-btn" class="btn btn-outline btn-sm" title="Discard unsaved changes">↺ Reset</button>
+          <button id="clear-all-btn" class="btn btn-outline btn-sm" title="Remove the saved manifest">🗑 Clear saved</button>
+        </span>
+      </div>
+      <div class="card-body preview-row">
+        <label class="muted" for="preview-row">Preview row:</label>
+        <select id="preview-row">
+          {% for i in range(rows_count) %}
+          <option value="{{ i }}">Row {{ i + 1 }}</option>
+          {% endfor %}
+          {% if rows_count == 0 %}<option value="0">No data loaded</option>{% endif %}
+        </select>
+        <a id="preview-link" class="btn btn-primary btn-sm" target="_blank" rel="noopener"
+           href="/generate?type={{ selected }}&row=0{% if active_file %}&file={{ active_file }}{% endif %}">
+           ⬇ Preview PDF
+        </a>
+        <span class="muted" style="font-size:12px;">
+          Tip: Save bindings first, then click Preview to see the output with the
+          current mapping applied.
+        </span>
+      </div>
+    </div>
+
+    <!-- Mapping grid -->
+    <div class="map-grid">
+
+      <!-- Left: data fields palette -->
+      <div class="panel">
+        <div class="panel-head">
+          <span>DATA FIELDS</span>
+          <span class="muted" id="fields-count">—</span>
+        </div>
+        <div class="panel-body" id="fields-panel">
+          <div class="empty">Loading fields…</div>
+        </div>
+      </div>
+
+      <!-- Right: placeholders -->
+      <div class="panel">
+        <div class="panel-head">
+          <span>TEMPLATE PLACEHOLDERS</span>
+          <span class="muted" id="ph-count">—</span>
+        </div>
+        <div class="panel-body" id="ph-panel">
+          <div class="empty">Loading placeholders…</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Repeating sections -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card-head">
+        <span>REPEATING SECTIONS</span>
+        <span class="muted" style="font-size:12px;">
+          One entry per <code>{{ '{% for x in … %}' }}</code> block in the DOCX.
+        </span>
+      </div>
+      <div class="card-body" id="repeating-panel">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+
+  {% endif %}
+</div>
+
+<script>
+(function() {
+  const docType = {{ selected|tojson }};
+  const hasTemplate = {{ 'true' if docx_template else 'false' }};
+  if (!docType || !hasTemplate) return;
+
+  const state = {
+    placeholders: { scalar_placeholders: [], repeating_sections: [], parse_error: null },
+    fields: { scalar_fields: [], list_fields: [] },
+    bindings: { scalars: {}, repeating: {} },
+    saved: JSON.stringify({ scalars: {}, repeating: {} }),
+  };
+
+  const $ = (sel) => document.querySelector(sel);
+  const fieldsPanel = $("#fields-panel");
+  const phPanel = $("#ph-panel");
+  const repPanel = $("#repeating-panel");
+  const statusLabel = $("#status-label");
+  const statusDot = $("#status-dot");
+  const saveBtn = $("#save-btn");
+  const resetBtn = $("#reset-btn");
+  const clearAllBtn = $("#clear-all-btn");
+
+  function setStatus(kind, label) {
+    statusDot.className = "status-dot " + (kind || "");
+    statusLabel.textContent = label;
+  }
+  function isDirty() {
+    return JSON.stringify(sanitise(state.bindings)) !== state.saved;
+  }
+  function updateDirty() {
+    if (isDirty()) { setStatus("dirty", "Unsaved changes"); saveBtn.disabled = false; }
+    else           { setStatus("saved", "All changes saved"); saveBtn.disabled = true; }
+  }
+
+  function sanitise(b) {
+    // Strip empty entries so the saved snapshot is stable.
+    const scalars = {};
+    Object.keys(b.scalars || {}).forEach(k => {
+      if (b.scalars[k]) scalars[k] = b.scalars[k];
+    });
+    const repeating = {};
+    Object.keys(b.repeating || {}).forEach(k => {
+      const v = b.repeating[k] || {};
+      if (!v.source) return;
+      const fm = {};
+      Object.keys(v.field_map || {}).forEach(ik => {
+        if (v.field_map[ik]) fm[ik] = v.field_map[ik];
+      });
+      repeating[k] = { source: v.source, field_map: fm };
+    });
+    return { scalars, repeating };
+  }
+
+  async function load() {
+    const qs = "?type=" + encodeURIComponent(docType);
+    const fileParam = {{ active_file|tojson }};
+    const fqs = fileParam ? ("&file=" + encodeURIComponent(fileParam)) : "";
+    try {
+      const [ph, fi, bi] = await Promise.all([
+        fetch("/api/studio/placeholders" + qs).then(r => r.json()),
+        fetch("/api/studio/fields" + qs + fqs).then(r => r.json()),
+        fetch("/api/studio/bindings" + qs).then(r => r.json()),
+      ]);
+      state.placeholders = ph;
+      state.fields = fi;
+      state.bindings = { scalars: bi.scalars || {}, repeating: bi.repeating || {} };
+      state.saved = JSON.stringify(sanitise(state.bindings));
+      renderAll();
+      updateDirty();
+    } catch (e) {
+      setStatus("dirty", "Error: " + e.message);
+    }
+  }
+
+  function renderAll() {
+    renderFields();
+    renderPlaceholders();
+    renderRepeating();
+    $("#fields-count").textContent = (state.fields.scalar_fields || []).length + " scalar, "
+                                   + (state.fields.list_fields || []).length + " list";
+    $("#ph-count").textContent = (state.placeholders.scalar_placeholders || []).length + " scalar, "
+                               + (state.placeholders.repeating_sections || []).length + " repeating";
+  }
+
+  function renderFields() {
+    const scalars = state.fields.scalar_fields || [];
+    if (!scalars.length) {
+      fieldsPanel.innerHTML = '<div class="empty">No data fields — upload an Excel / CSV on the main page first.</div>';
+      return;
+    }
+    fieldsPanel.innerHTML = scalars.map(f =>
+      `<div class="field" draggable="true" data-field="${escapeAttr(f.name)}">
+         <span>${escapeHtml(f.name)}</span>
+         <span class="ftype">${escapeHtml(f.type || '')}</span>
+       </div>`
+    ).join("");
+    fieldsPanel.querySelectorAll('.field').forEach(el => {
+      el.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/x-field', el.dataset.field);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    });
+  }
+
+  function renderPlaceholders() {
+    const pls = state.placeholders.scalar_placeholders || [];
+    if (state.placeholders.parse_error) {
+      phPanel.innerHTML = '<div class="alert alert-warn">'
+        + escapeHtml(state.placeholders.parse_error) + '</div>';
+    } else if (!pls.length) {
+      phPanel.innerHTML = '<div class="empty">No scalar placeholders found in the DOCX.</div>';
+      return;
+    } else {
+      phPanel.innerHTML = "";
+    }
+    pls.forEach(name => {
+      const bound = state.bindings.scalars[name] || "";
+      const row = document.createElement('div');
+      row.className = 'ph';
+      row.innerHTML =
+        `<span class="name">{{ '{{' }} ${escapeHtml(name)} {{ '}}' }}</span>
+         <span class="binding ${bound ? 'bound' : ''}" data-placeholder="${escapeAttr(name)}">
+           <span class="label">${bound ? escapeHtml(bound) : 'drop a field here…'}</span>
+           ${bound ? `<button class="clear-btn" title="Remove binding">×</button>` : ''}
+         </span>`;
+      phPanel.appendChild(row);
+
+      const bindingEl = row.querySelector('.binding');
+      bindingEl.addEventListener('dragover', (e) => { e.preventDefault(); bindingEl.classList.add('drop-ok'); });
+      bindingEl.addEventListener('dragleave', () => bindingEl.classList.remove('drop-ok'));
+      bindingEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        bindingEl.classList.remove('drop-ok');
+        const field = e.dataTransfer.getData('text/x-field');
+        if (!field) return;
+        state.bindings.scalars[name] = field;
+        renderPlaceholders();
+        updateDirty();
+      });
+      const clearBtn = row.querySelector('.clear-btn');
+      if (clearBtn) clearBtn.addEventListener('click', () => {
+        delete state.bindings.scalars[name];
+        renderPlaceholders(); updateDirty();
+      });
+    });
+  }
+
+  function renderRepeating() {
+    const reps = state.placeholders.repeating_sections || [];
+    const listFields = state.fields.list_fields || [];
+    if (!reps.length) {
+      repPanel.innerHTML = '<div class="empty">No <code>{{ "{% for %}" }}</code> blocks in the DOCX.</div>';
+      return;
+    }
+    repPanel.innerHTML = "";
+    reps.forEach(rs => {
+      const current = state.bindings.repeating[rs.iter_source] || { source: "", field_map: {} };
+      const block = document.createElement('div');
+      block.className = 'repeating';
+      const innerFieldsOptions = (src) => {
+        const match = listFields.find(lf => lf.name === src);
+        const opts = (match && match.item_keys) ? match.item_keys : [];
+        return opts.map(k => `<option value="${escapeAttr(k)}">${escapeHtml(k)}</option>`).join("");
+      };
+      block.innerHTML = `
+        <h4><code>{{ '{% for' }} ${escapeHtml(rs.loop_var || 'row')} in ${escapeHtml(rs.iter_source)} {{ '%}' }}</code></h4>
+        <div class="source-row">
+          <span class="muted">Source list:</span>
+          <select class="src-sel">
+            <option value="">— pick a list —</option>
+            ${listFields.map(lf => {
+              const sel = (lf.name === current.source) ? 'selected' : '';
+              return `<option value="${escapeAttr(lf.name)}" ${sel}>${escapeHtml(lf.name)} (${lf.sample_count} rows)</option>`;
+            }).join("")}
+          </select>
+        </div>
+        <div class="inner-grid">
+          ${(rs.inner_fields || []).length === 0 ? '<div class="muted" style="grid-column:1/-1;">No inner fields referenced.</div>' : ''}
+          ${(rs.inner_fields || []).map(inner => {
+            const bound = (current.field_map || {})[inner] || "";
+            return `
+              <div>${escapeHtml(rs.loop_var || 'row')}.${escapeHtml(inner)}</div>
+              <select data-inner="${escapeAttr(inner)}" class="inner-sel">
+                <option value="">— unbound —</option>
+                ${innerFieldsOptions(current.source).replace(
+                   new RegExp('value="' + escapeAttr(bound) + '"'),
+                   'value="' + escapeAttr(bound) + '" selected')}
+              </select>
+            `;
+          }).join("")}
+        </div>
+      `;
+      repPanel.appendChild(block);
+
+      const srcSel = block.querySelector('.src-sel');
+      srcSel.addEventListener('change', () => {
+        const entry = state.bindings.repeating[rs.iter_source] || { source: "", field_map: {} };
+        entry.source = srcSel.value;
+        state.bindings.repeating[rs.iter_source] = entry;
+        updateDirty();
+        renderRepeating();  // refresh inner dropdown options
+      });
+      block.querySelectorAll('.inner-sel').forEach(sel => {
+        sel.addEventListener('change', () => {
+          const entry = state.bindings.repeating[rs.iter_source] || { source: "", field_map: {} };
+          const inner = sel.dataset.inner;
+          if (sel.value) entry.field_map[inner] = sel.value;
+          else delete entry.field_map[inner];
+          state.bindings.repeating[rs.iter_source] = entry;
+          updateDirty();
+        });
+      });
+    });
+  }
+
+  async function save() {
+    setStatus("", "Saving…"); saveBtn.disabled = true;
+    try {
+      const res = await fetch("/api/studio/bindings?type=" + encodeURIComponent(docType), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sanitise(state.bindings)),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const saved = await res.json();
+      state.bindings = { scalars: saved.scalars || {}, repeating: saved.repeating || {} };
+      state.saved = JSON.stringify(sanitise(state.bindings));
+      renderAll(); updateDirty();
+    } catch (e) {
+      setStatus("dirty", "Save failed: " + e.message);
+    }
+  }
+
+  async function clearSaved() {
+    if (!confirm("Delete the saved binding manifest?")) return;
+    await fetch("/api/studio/bindings?type=" + encodeURIComponent(docType), { method: "DELETE" });
+    state.bindings = { scalars: {}, repeating: {} };
+    state.saved = JSON.stringify(sanitise(state.bindings));
+    renderAll(); updateDirty();
+  }
+
+  saveBtn.addEventListener('click', save);
+  resetBtn.addEventListener('click', load);
+  clearAllBtn.addEventListener('click', clearSaved);
+
+  // Preview link keeps the selected row.
+  const rowSel = $("#preview-row"), link = $("#preview-link");
+  const fileParam = {{ active_file|tojson }};
+  function updatePreviewLink() {
+    const r = rowSel.value || "0";
+    let href = "/generate?type=" + encodeURIComponent(docType) + "&row=" + encodeURIComponent(r);
+    if (fileParam) href += "&file=" + encodeURIComponent(fileParam);
+    link.href = href;
+  }
+  rowSel.addEventListener('change', updatePreviewLink);
+  updatePreviewLink();
+
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  load();
+})();
+</script>
+</body></html>"""
+
+
+# ── Template Studio routes ────────────────────────────────────────────────────
+@app.route("/studio")
+def studio():
+    from data_loader import get_doc_schema
+    selected = request.args.get("type", "")
+    active_file = _safe_active_file(request.args.get("file", ""))
+    rows_count = 0
+    docx_template = ""
+    doc_label = "Template Studio"
+
+    if selected and selected in DOC_LABELS:
+        doc_label = DOC_LABELS[selected]
+        if has_uploaded_template(selected):
+            docx_template = uploaded_template_path(selected).name
+        dp = str(UPLOAD_DIR / active_file) if active_file else None
+        try:
+            rows, _ = get_preview_rows(selected, dp)
+            rows_count = len(rows)
+        except Exception:
+            rows_count = 0
+
+    return render_template_string(
+        STUDIO_UI,
+        doc_labels=DOC_LABELS, selected=selected,
+        active_file=active_file, docx_template=docx_template,
+        doc_label=doc_label, rows_count=rows_count,
+    )
+
+
+def _require_doc_type() -> str:
+    doc_type = request.args.get("type", "")
+    if doc_type not in DOC_LABELS:
+        abort(400, description="Unknown document type.")
+    return doc_type
+
+
+@app.route("/api/studio/placeholders")
+def api_studio_placeholders():
+    doc_type = _require_doc_type()
+    if not has_uploaded_template(doc_type):
+        return jsonify({
+            "template_name": "",
+            "scalar_placeholders": [],
+            "repeating_sections": [],
+            "parse_error": "No DOCX uploaded for this document type.",
+        })
+    try:
+        return jsonify(extract_placeholders(doc_type))
+    except FileNotFoundError as exc:
+        return jsonify({
+            "template_name": "", "scalar_placeholders": [],
+            "repeating_sections": [], "parse_error": str(exc),
+        })
+
+
+@app.route("/api/studio/fields")
+def api_studio_fields():
+    from data_loader import get_doc_schema
+    doc_type = _require_doc_type()
+    active_file = _safe_active_file(request.args.get("file", ""))
+
+    schema = get_doc_schema(doc_type)
+    schema_fields: dict = schema.get("fields", {})
+
+    scalar_fields: list[dict] = []
+    list_fields_map: dict[str, dict] = {}
+
+    for name, fdef in schema_fields.items():
+        ftype = fdef.get("type", "string")
+        if ftype == "list":
+            list_fields_map[name] = {
+                "name": name, "type": "list",
+                "item_keys": [], "sample_count": 0,
+            }
+        else:
+            scalar_fields.append({"name": name, "type": ftype})
+
+    # Extra data-specific fields: look at the first loaded record for any keys
+    # not declared in the schema, and for any list-valued fields introspect the
+    # item keys so the Studio can offer them in inner-field dropdowns.
+    dp = str(UPLOAD_DIR / active_file) if active_file else None
+    try:
+        rows, _cols = get_preview_rows(doc_type, dp)
+    except Exception:
+        rows = []
+
+    if rows:
+        first = rows[0]
+        known = {f["name"] for f in scalar_fields} | set(list_fields_map.keys())
+        for k, v in first.items():
+            if k in known:
+                if isinstance(v, list) and v and isinstance(v[0], dict):
+                    # Surface the actual item keys — may be a superset of the schema.
+                    lf = list_fields_map.setdefault(
+                        k, {"name": k, "type": "list",
+                            "item_keys": [], "sample_count": 0})
+                    lf["item_keys"] = list(v[0].keys())
+                    lf["sample_count"] = len(v)
+                continue
+            if isinstance(v, list):
+                if v and isinstance(v[0], dict):
+                    list_fields_map[k] = {
+                        "name": k, "type": "list",
+                        "item_keys": list(v[0].keys()),
+                        "sample_count": len(v),
+                    }
+                else:
+                    list_fields_map[k] = {
+                        "name": k, "type": "list",
+                        "item_keys": ["value"], "sample_count": len(v),
+                    }
+            else:
+                scalar_fields.append({"name": k, "type": "extra"})
+
+    # Stable ordering
+    scalar_fields.sort(key=lambda f: f["name"].lower())
+    list_fields = sorted(list_fields_map.values(), key=lambda f: f["name"].lower())
+    return jsonify({
+        "scalar_fields": scalar_fields,
+        "list_fields":   list_fields,
+    })
+
+
+@app.route("/api/studio/bindings", methods=["GET"])
+def api_studio_bindings_get():
+    doc_type = _require_doc_type()
+    return jsonify(load_bindings(doc_type))
+
+
+@app.route("/api/studio/bindings", methods=["POST"])
+def api_studio_bindings_post():
+    doc_type = _require_doc_type()
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        abort(400, description="Body must be a JSON object.")
+    try:
+        saved = save_bindings(doc_type, payload)
+    except ValueError as exc:
+        abort(400, description=str(exc))
+    return jsonify(saved)
+
+
+@app.route("/api/studio/bindings", methods=["DELETE"])
+def api_studio_bindings_delete():
+    doc_type = _require_doc_type()
+    removed = remove_bindings(doc_type)
+    return jsonify({"removed": removed})
+
 
 @app.route("/batch-status")
 def batch_status():

@@ -24,6 +24,7 @@ from rules_engine  import apply_rules
 from renderer      import render_pdf
 from docx_renderer import (has_uploaded_template, render_docx_pdf,
                            uploaded_template_path)
+from template_studio import apply_bindings, load_bindings
 
 log        = logging.getLogger(__name__)
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -94,8 +95,12 @@ def generate_one(doc_type:   str,
         # 3. Render PDF — prefer an uploaded DOCX template if present,
         #    otherwise fall back to the built-in HTML/Jinja2 pipeline.
         if has_uploaded_template(doc_type):
+            # Enrich the context with any Template Studio bindings so DOCX
+            # authors can reference placeholders (e.g. ``{{ customer_name }}``)
+            # even when the source data uses different column names (``NAME``).
+            bound_context = apply_bindings(context, load_bindings(doc_type))
             pdf_bytes = render_docx_pdf(uploaded_template_path(doc_type),
-                                        context)
+                                        bound_context)
         else:
             pdf_bytes = render_pdf(doc_type, context)
 
