@@ -1,0 +1,1 @@
+Payslip {{ pay_period }}: net pay {{ net_pay | currency }} credited to {{ bank_account }} on {{ pay_date }}. Gross {{ gross_earnings | currency }}, deductions {{ total_deductions | currency }}.

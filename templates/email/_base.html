@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+{# ADA-compliant email shell. All CSS is inlined for client compatibility.  #}
+{# Swap the HSL tokens below to re-brand without touching individual docs.  #}
+{% set c_ink      = '#1F2937' %}
+{% set c_muted    = '#6B7280' %}
+{% set c_rule     = '#E5E7EB' %}
+{% set c_surface  = '#FFFFFF' %}
+{% set c_canvas   = '#F3F4F6' %}
+{% set c_brand    = '#1E3A5F' %}
+{% set c_accent   = '#F0F4FF' %}
+{% set c_warn_bg  = '#FEF3C7' %}
+{% set c_warn_ink = '#78350F' %}
+{% set c_crit_bg  = '#FEE2E2' %}
+{% set c_crit_ink = '#7F1D1D' %}
+{% set c_ok_bg    = '#DCFCE7' %}
+{% set c_ok_ink   = '#14532D' %}
+<html lang="{{ language | default('en') }}" dir="ltr" xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:v="urn:schemas-microsoft-com:vml">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <meta name="supported-color-schemes" content="light only">
+  <title>{% block title %}Statement{% endblock %}</title>
+</head>
+<body style="margin:0;padding:0;background-color:{{ c_canvas }};
+             font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                          'Helvetica Neue',Arial,sans-serif;color:{{ c_ink }};
+             -webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+  <a href="#main-content"
+     style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;
+            overflow:hidden;"
+     aria-label="Skip to main content">Skip to main content</a>
+
+  <span aria-hidden="false"
+        style="display:none !important;visibility:hidden;mso-hide:all;
+               font-size:1px;line-height:1px;max-height:0;max-width:0;
+               opacity:0;overflow:hidden;">
+    {% block preheader %}{% endblock %}
+  </span>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="background-color:{{ c_canvas }};">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+               style="width:600px;max-width:100%;background-color:{{ c_surface }};
+                      border:1px solid {{ c_rule }};border-radius:8px;overflow:hidden;">
+          <tr>
+            <td role="banner"
+                style="background-color:{{ c_brand }};color:{{ c_surface }};
+                       padding:20px 28px;">
+              <h1 style="margin:0;font-size:20px;line-height:1.3;
+                         font-weight:700;color:{{ c_surface }};">
+                {% block header %}Statement{% endblock %}
+              </h1>
+              {% block subheader %}{% endblock %}
+            </td>
+          </tr>
+          <tr>
+            <td id="main-content" role="main"
+                style="padding:28px;font-size:16px;line-height:1.55;color:{{ c_ink }};">
+              {% block content %}{% endblock %}
+            </td>
+          </tr>
+          <tr>
+            <td role="contentinfo"
+                style="padding:20px 28px;border-top:1px solid {{ c_rule }};
+                       background-color:{{ c_accent }};font-size:13px;
+                       line-height:1.5;color:{{ c_muted }};">
+              {% block footer %}
+              This is an automated message. If you did not expect it, please
+              contact customer support. Do not reply to this email.
+              {% endblock %}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

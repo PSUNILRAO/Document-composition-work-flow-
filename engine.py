@@ -25,6 +25,25 @@ from renderer      import render_pdf
 from docx_renderer import (has_uploaded_template, render_docx_pdf,
                            uploaded_template_path)
 from template_studio import apply_bindings, load_bindings
+from email_renderer import render_email_html
+from sms_renderer   import render_sms
+from docx_exporter  import render_docx as render_docx_bytes
+
+# Channels supported by ``generate_channel``.
+CHANNELS = ("pdf", "email", "sms", "docx")
+
+# Mimetype + file-extension metadata per channel.
+CHANNEL_META = {
+    "pdf":   {"mimetype": "application/pdf",
+              "ext":      "pdf"},
+    "email": {"mimetype": "text/html; charset=utf-8",
+              "ext":      "html"},
+    "sms":   {"mimetype": "text/plain; charset=utf-8",
+              "ext":      "txt"},
+    "docx":  {"mimetype": ("application/vnd.openxmlformats-officedocument."
+                           "wordprocessingml.document"),
+              "ext":      "docx"},
+}
 
 log        = logging.getLogger(__name__)
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -132,6 +151,68 @@ def generate_one(doc_type:   str,
             output_path="", row_index=row_index,
             duration_ms=duration, errors=[str(exc)],
         )
+
+
+# ── Multi-channel rendering ──────────────────────────────────────────────────
+def generate_channel(doc_type: str,
+                     row_index: int,
+                     channel: str = "pdf",
+                     data_path: str | None = None) -> tuple[bytes, str, str, dict]:
+    """
+    Render a single record to one of the supported channels.
+
+    Returns ``(payload, filename, mimetype, extra)``:
+      * payload  — bytes (pdf/docx) or utf-8-encoded text (email html / sms)
+      * filename — canonical output file name including extension
+      * mimetype — content-type suitable for an HTTP response
+      * extra    — channel-specific metadata (e.g. SMS segmentation details)
+
+    Raises ValueError on unknown channel; data/rules errors propagate.
+    """
+    if channel not in CHANNELS:
+        raise ValueError(f"Unsupported channel: {channel!r}")
+
+    record  = load_record(doc_type, row_index, data_path)
+    context = apply_rules(doc_type, record)
+
+    # Template Studio bindings target DOCX *placeholder names* — they're
+    # only meaningful for channels that render from the uploaded DOCX
+    # (pdf via docx_renderer, docx via docxtpl). Applying them to the
+    # email/SMS context would silently overwrite rule-computed values
+    # whenever a placeholder name collides with a context key.
+    if channel in ("pdf", "docx") and has_uploaded_template(doc_type):
+        context = apply_bindings(context, load_bindings(doc_type))
+
+    meta    = CHANNEL_META[channel]
+    base    = (record.get("output_filename")
+               or f"{doc_type}_{row_index + 1:04d}.pdf")
+    stem    = base.rsplit(".", 1)[0]
+    filename = f"{stem}.{meta['ext']}"
+
+    extra: dict = {}
+
+    if channel == "pdf":
+        if has_uploaded_template(doc_type):
+            payload = render_docx_pdf(uploaded_template_path(doc_type), context)
+        else:
+            payload = render_pdf(doc_type, context)
+    elif channel == "email":
+        html = render_email_html(doc_type, context)
+        payload = html.encode("utf-8")
+        extra["html"] = html
+    elif channel == "sms":
+        sms = render_sms(doc_type, context)
+        # Each part on its own line so the delivered payload can be split
+        # deterministically by the gateway.
+        payload = "\n".join(sms["parts"]).encode("utf-8")
+        extra.update(sms)
+    else:  # channel == "docx"
+        if not has_uploaded_template(doc_type):
+            raise ValueError(
+                "DOCX export requires an uploaded DOCX template for this doc type.")
+        payload = render_docx_bytes(uploaded_template_path(doc_type), context)
+
+    return payload, filename, meta["mimetype"], extra
 
 
 # ── Worker for multiprocessing pool ──────────────────────────────────────────
