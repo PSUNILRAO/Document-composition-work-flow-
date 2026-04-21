@@ -6,6 +6,7 @@
       "label": "Bank / Financial Statement",
       "template": "bank_statement.html",
       "data_sheet": "BankStatements",
+      "use_ir": true,
       "fields": {
         "account_number":    { "type": "string",   "required": true,  "mask": "****{{last4}}" },
         "account_holder":    { "type": "string",   "required": true },
