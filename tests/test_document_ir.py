@@ -81,11 +81,17 @@ class BuilderShapeTests(unittest.TestCase):
         self.assertIn("Strong", kinds)
 
     def test_document_is_hashable_and_serialisable(self) -> None:
-        """Frozen dataclasses → the tree can be hashed (cache key) and json-dumped."""
+        """Frozen dataclasses → the root Document can be hashed (cache key)
+        and json-dumped. This verifies metadata stays hashable (tuple-of-
+        pairs), not just the blocks tuple.
+        """
         doc = ir_builders.build("bank_statement", _bank_ctx())
-        # Hashing proves every nested dataclass is frozen & uses only
-        # hashable field types.
-        self.assertIsInstance(hash(doc.blocks), int)
+        self.assertIsInstance(hash(doc), int)
+        # Rebuilding from the same context yields an equal, equally-hashed
+        # Document — proves deterministic & cacheable.
+        doc2 = ir_builders.build("bank_statement", _bank_ctx())
+        self.assertEqual(doc, doc2)
+        self.assertEqual(hash(doc), hash(doc2))
 
         def _asdict(node):
             if hasattr(node, "__dataclass_fields__"):
@@ -99,6 +105,14 @@ class BuilderShapeTests(unittest.TestCase):
 
         payload = json.dumps(_asdict(doc), default=str)
         self.assertIn("bank_statement", payload)
+
+    def test_metadata_factory_sorts_and_drops_empty(self) -> None:
+        """``metadata(...)`` produces a sorted tuple and drops empty values."""
+        from document_ir import metadata
+        m = metadata({"b": "2", "a": "1", "c": ""})
+        self.assertEqual(m, (("a", "1"), ("b", "2")))
+        # Different insertion orders → same hashable tuple.
+        self.assertEqual(hash(m), hash(metadata(a="1", b="2")))
 
 
 class HtmlRendererTests(unittest.TestCase):

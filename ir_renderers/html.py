@@ -292,8 +292,8 @@ def _render_block(block, flavor: Flavor) -> str:
 
 # ── Document shells ──────────────────────────────────────────────────────────
 def _email_shell(doc: Document, body: str) -> str:
-    closing = doc.metadata.get("closing_balance", "")
-    preheader_raw = doc.metadata.get("preheader") or (
+    closing = doc.meta("closing_balance")
+    preheader_raw = doc.meta("preheader") or (
         f"{doc.title} — closing balance {closing}".strip()
         if closing else doc.title
     )

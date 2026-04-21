@@ -28,8 +28,8 @@ live in ``ir_renderers/``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Literal, Union
+from dataclasses import dataclass
+from typing import Iterable, Literal, Mapping, Union
 
 
 # ── Inlines ──────────────────────────────────────────────────────────────────
@@ -181,8 +181,13 @@ class Document:
         title      : short title used in HTML <title>, email subject fallbacks.
         language   : BCP-47 language tag (default ``"en"``).
         metadata   : arbitrary ``str → str`` key/values that renderers may
-                     surface in headers (doc id, period, etc.). Not schema-
-                     enforced; renderers ignore keys they don't recognise.
+                     surface in headers (doc id, period, etc.). Stored as a
+                     sorted tuple of pairs so ``Document`` stays hashable
+                     (the whole point of ``frozen=True``). Callers normally
+                     build it with the ``metadata(...)`` factory below and
+                     read it with ``Document.meta(key, default)``. Not
+                     schema-enforced; renderers ignore keys they don't
+                     recognise.
         blocks     : top-level flow. Typically one ``Section`` each for
                      ``header``, ``main`` and ``footer`` — but any block is
                      allowed at the root.
@@ -194,8 +199,42 @@ class Document:
     title: str
     blocks: tuple[Block, ...]
     language: str = "en"
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: tuple[tuple[str, str], ...] = ()
     alerts: tuple[Callout, ...] = ()
+
+    def meta(self, key: str, default: str = "") -> str:
+        """Return the metadata value for ``key`` or ``default``."""
+        for k, v in self.metadata:
+            if k == key:
+                return v
+        return default
+
+    def meta_dict(self) -> dict[str, str]:
+        """Return a fresh mutable dict view of the metadata pairs."""
+        return dict(self.metadata)
+
+
+def metadata(
+    source: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
+    **kwargs: str,
+) -> tuple[tuple[str, str], ...]:
+    """Build a hashable ``Document.metadata`` tuple from dict / pairs / kwargs.
+
+    Empty-string values are dropped so renderers don't have to re-check
+    every key; keys are sorted so equal metadata produces equal tuples
+    (and thus equal hashes) regardless of insertion order.
+    """
+    items: dict[str, str] = {}
+    if source is not None:
+        if isinstance(source, Mapping):
+            items.update(source)
+        else:
+            items.update(dict(source))
+    items.update(kwargs)
+    return tuple(
+        (k, v) for k, v in sorted(items.items(), key=lambda kv: kv[0])
+        if v != ""
+    )
 
 
 # ── Small conveniences ───────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ from document_ir import (
     Table,
     TableCell,
     Text,
+    metadata,
     para,
 )
 from . import register
@@ -158,12 +159,12 @@ def build(context: dict) -> Document:
         doc_type="bank_statement",
         title=f"{acct_type} Statement {number}".strip(),
         language="en",
-        metadata={
-            "account_number": number,
-            "period_from": period_from,
-            "period_to": period_to,
-            "closing_balance": _currency(context.get("closing_balance")),
-        },
+        metadata=metadata(
+            account_number=number,
+            period_from=period_from,
+            period_to=period_to,
+            closing_balance=_currency(context.get("closing_balance")),
+        ),
         alerts=_alerts(context),
         blocks=(header, main, footer),
     )
