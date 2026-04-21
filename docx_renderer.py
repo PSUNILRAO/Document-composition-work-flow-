@@ -230,9 +230,16 @@ def _expand_multi_paragraph_blocks(doc: _DocxDocument, context: dict) -> None:
             j = i + 1
             while j < len(paragraphs) and depth > 0:
                 tj = _para_text(paragraphs[j])
-                if _BLOCK_START_RE.search(tj) and not _BLOCK_END_RE.search(tj):
+                has_start = bool(_BLOCK_START_RE.search(tj))
+                has_end = bool(_BLOCK_END_RE.search(tj))
+                if has_start and has_end:
+                    # Self-contained inner block on a single paragraph
+                    # (e.g. ``{% if x.active %}…{% endif %}``) — neither opens
+                    # nor closes the outer span, so leave depth untouched.
+                    pass
+                elif has_start:
                     depth += 1
-                elif _BLOCK_END_RE.search(tj):
+                elif has_end:
                     depth -= 1
                     if depth == 0:
                         break
