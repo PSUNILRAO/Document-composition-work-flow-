@@ -1,0 +1,89 @@
+{% extends "_base.html" %}
+{% block title %}Payslip {{ pay_period }}{% endblock %}
+{% block preheader %}
+  Your payslip for {{ pay_period }} is ready. Net pay
+  {{ net_pay | currency }}.
+{% endblock %}
+{% block header %}Payslip{% endblock %}
+{% block subheader %}
+  <p style="margin:6px 0 0;font-size:14px;line-height:1.4;color:#FFFFFF;opacity:.92;">
+    {{ pay_period }} &middot; Paid {{ pay_date }}
+  </p>
+{% endblock %}
+{% block content %}
+  <p style="margin:0 0 16px;">Dear {{ employee_name }},</p>
+  <p style="margin:0 0 18px;">
+    Your payslip for <strong>{{ pay_period }}</strong> is now available.
+    Employee ID: {{ employee_id }}.
+  </p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;margin:0 0 22px;">
+    {% for label, value in [
+        ('Gross earnings',     gross_earnings   | currency),
+        ('Total deductions',   total_deductions | currency),
+        ('Net pay',            net_pay          | currency),
+        ('Days worked',        days_worked),
+        ('Bank account',       bank_account),
+    ] %}
+    <tr>
+      <th scope="row"
+          style="text-align:left;padding:8px 0;font-weight:500;
+                 color:#6B7280;border-bottom:1px solid #E5E7EB;font-size:14px;">
+        {{ label }}
+      </th>
+      <td style="text-align:right;padding:8px 0;
+                 border-bottom:1px solid #E5E7EB;font-size:15px;">
+        {{ value }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if earnings %}
+  <h2 style="margin:20px 0 8px;font-size:16px;color:#1E3A5F;">Earnings</h2>
+  <table role="table" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;font-size:14px;margin:0 0 20px;">
+    <thead>
+      <tr style="background-color:#F0F4FF;">
+        <th scope="col" style="text-align:left;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Component</th>
+        <th scope="col" style="text-align:right;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in earnings %}
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;">{{ e.component }}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;
+                   text-align:right;font-variant-numeric:tabular-nums;">
+          {{ e.amount | currency }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if deductions %}
+  <h2 style="margin:20px 0 8px;font-size:16px;color:#1E3A5F;">Deductions</h2>
+  <table role="table" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;font-size:14px;">
+    <thead>
+      <tr style="background-color:#F0F4FF;">
+        <th scope="col" style="text-align:left;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Component</th>
+        <th scope="col" style="text-align:right;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in deductions %}
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;">{{ d.component }}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;
+                   text-align:right;font-variant-numeric:tabular-nums;">
+          {{ d.amount | currency }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{% endblock %}

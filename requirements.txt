@@ -4,6 +4,7 @@ reportlab>=4.1.0
 openpyxl>=3.1.0
 pyyaml>=6.0.0
 python-docx>=1.1.0
+docxtpl>=0.16.0
 
 # Optional — significantly better HTML→PDF fidelity:
 # weasyprint>=61.0

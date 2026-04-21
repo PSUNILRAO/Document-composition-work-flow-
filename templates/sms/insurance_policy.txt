@@ -1,0 +1,1 @@
+{{ policy_type | default('Policy') }} {{ policy_number }} is active thru {{ expiry_date }}. Sum assured {{ sum_assured | currency }}. Next premium {{ premium_amount | currency }} ({{ premium_frequency }}). Agent: {{ agent_name | default('-') }}.

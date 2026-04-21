@@ -1,0 +1,75 @@
+{% extends "_base.html" %}
+{% block title %}Bill {{ bill_number }}{% endblock %}
+{% block preheader %}
+  Your {{ plan_name | default('mobile') }} bill {{ bill_number }}
+  is due {{ due_date }}. Total {{ total_due | currency }}.
+{% endblock %}
+{% block header %}Mobile / Telecom Bill{% endblock %}
+{% block subheader %}
+  <p style="margin:6px 0 0;font-size:14px;line-height:1.4;color:#FFFFFF;opacity:.92;">
+    Bill {{ bill_number }} &middot; {{ billing_period }}
+  </p>
+{% endblock %}
+{% block content %}
+  <p style="margin:0 0 16px;">Dear {{ customer_name }},</p>
+  <p style="margin:0 0 18px;">
+    Your bill for account <strong>{{ account_number }}</strong> is ready.
+  </p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;margin:0 0 22px;">
+    {% for label, value in [
+        ('Plan',             plan_name),
+        ('Current charges',  current_charges | currency),
+        ('Taxes &amp; fees', taxes_fees      | currency),
+        ('Total due',        total_due       | currency),
+        ('Due date',         due_date),
+    ] %}
+    <tr>
+      <th scope="row"
+          style="text-align:left;padding:8px 0;font-weight:500;
+                 color:#6B7280;border-bottom:1px solid #E5E7EB;font-size:14px;">
+        {{ label }}
+      </th>
+      <td style="text-align:right;padding:8px 0;
+                 border-bottom:1px solid #E5E7EB;font-size:15px;font-weight:600;">
+        {{ value }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if charges %}
+  <h2 style="margin:20px 0 8px;font-size:16px;color:#1E3A5F;">Charges breakdown</h2>
+  <table role="table" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;font-size:14px;">
+    <thead>
+      <tr style="background-color:#F0F4FF;">
+        <th scope="col" style="text-align:left;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Description</th>
+        <th scope="col" style="text-align:right;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in charges %}
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;">
+          {{ c.description }}
+        </td>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;
+                   text-align:right;font-variant-numeric:tabular-nums;">
+          {{ c.amount | currency }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if days_overdue and days_overdue > 0 %}
+  <p role="alert" style="margin:18px 0 0;padding:10px 14px;
+           background-color:#FEE2E2;color:#7F1D1D;border-radius:4px;
+           font-size:14px;">
+    This account is {{ days_overdue }} day(s) overdue. Please pay to avoid
+    service interruption.
+  </p>
+  {% endif %}
+{% endblock %}

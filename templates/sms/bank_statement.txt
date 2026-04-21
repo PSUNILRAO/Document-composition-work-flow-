@@ -1,0 +1,1 @@
+{{ account_type | default('Acct') }} {{ account_number }}: closing bal {{ closing_balance | currency }} for {{ period_from }}-{{ period_to }}. Credits {{ total_credits | currency }}, debits {{ total_debits | currency }}. View statement online.

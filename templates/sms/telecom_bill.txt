@@ -1,0 +1,1 @@
+Bill {{ bill_number }}: {{ total_due | currency }} due {{ due_date }} for {{ billing_period }}. Plan {{ plan_name }}. {% if days_overdue and days_overdue > 0 %}Overdue {{ days_overdue }}d - pay now to avoid service interruption.{% else %}Pay online to avoid late fees.{% endif %}

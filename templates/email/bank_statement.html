@@ -1,0 +1,82 @@
+{% extends "_base.html" %}
+{% block title %}Statement {{ account_number }}{% endblock %}
+{% block preheader %}
+  Your {{ account_type | default('account') }} statement for
+  {{ period_from }} – {{ period_to }} is ready. Closing balance
+  {{ closing_balance | currency }}.
+{% endblock %}
+{% block header %}
+  {{ account_type | default('Account') }} Statement
+{% endblock %}
+{% block subheader %}
+  <p style="margin:6px 0 0;font-size:14px;line-height:1.4;color:#FFFFFF;opacity:.92;">
+    {{ period_from }} &ndash; {{ period_to }}
+  </p>
+{% endblock %}
+{% block content %}
+  <p style="margin:0 0 16px;">
+    Dear {{ account_holder }},
+  </p>
+  <p style="margin:0 0 18px;">
+    Your statement for account <strong>{{ account_number }}</strong>
+    is now available. Highlights for this period:
+  </p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;margin:0 0 22px;">
+    {% for label, value in [
+        ('Opening balance',  opening_balance | currency),
+        ('Total credits',    total_credits   | currency),
+        ('Total debits',     total_debits    | currency),
+        ('Closing balance',  closing_balance | currency),
+    ] %}
+    <tr>
+      <th scope="row"
+          style="text-align:left;padding:8px 0;font-weight:500;
+                 color:#6B7280;border-bottom:1px solid #E5E7EB;font-size:14px;">
+        {{ label }}
+      </th>
+      <td style="text-align:right;padding:8px 0;
+                 border-bottom:1px solid #E5E7EB;font-size:15px;font-weight:600;">
+        {{ value }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if transactions %}
+  <h2 style="margin:24px 0 10px;font-size:16px;color:#1E3A5F;">
+    Recent transactions
+  </h2>
+  <table role="table" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;font-size:14px;">
+    <thead>
+      <tr style="background-color:#F0F4FF;">
+        <th scope="col" style="text-align:left;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Date</th>
+        <th scope="col" style="text-align:left;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Description</th>
+        <th scope="col" style="text-align:right;padding:8px 10px;border-bottom:1px solid #E5E7EB;">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in transactions %}
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;white-space:nowrap;">
+          {{ t.date }}
+        </td>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;">
+          {{ t.description }}
+        </td>
+        <td style="padding:8px 10px;border-bottom:1px solid #E5E7EB;
+                   text-align:right;font-variant-numeric:tabular-nums;">
+          {{ t.amount | currency }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <p style="margin:22px 0 0;font-size:14px;color:#6B7280;">
+    View the full PDF statement in your online banking portal or contact us
+    at {{ branch_name | default('your branch') }} for assistance.
+  </p>
+{% endblock %}

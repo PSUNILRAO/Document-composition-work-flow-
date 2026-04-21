@@ -623,6 +623,11 @@ def generate():
     if row_index < 0:
         abort(400, "Invalid row index.")
 
+    channel = request.args.get("channel", "pdf").lower()
+    from engine import CHANNELS
+    if channel not in CHANNELS:
+        abort(400, f"Unsupported channel: {channel}")
+
     active_file = request.args.get("file", "")
     dp: str | None = None
     if active_file:
@@ -631,16 +636,36 @@ def generate():
             abort(400, "Invalid or unknown data file.")
         dp = str(safe_path)
 
-    result = generate_one(doc_type, row_index, dp, save=True)
-    if result.success:
-        return send_file(
-            io.BytesIO(result.pdf_bytes),
-            mimetype="application/pdf",
-            as_attachment=True,
-            download_name=result.filename,
-        )
-    flash(f"Error: {result.errors[0] if result.errors else 'Unknown'}", "error")
-    return redirect(f"/?type={doc_type}&file={active_file}")
+    # "pdf" keeps the DocResult path so it still populates output/ on disk.
+    if channel == "pdf":
+        result = generate_one(doc_type, row_index, dp, save=True)
+        if result.success:
+            return send_file(
+                io.BytesIO(result.pdf_bytes),
+                mimetype="application/pdf",
+                as_attachment=True,
+                download_name=result.filename,
+            )
+        flash(f"Error: {result.errors[0] if result.errors else 'Unknown'}", "error")
+        return redirect(f"/?type={doc_type}&file={active_file}")
+
+    from engine import generate_channel
+    try:
+        payload, filename, mimetype, extra = generate_channel(
+            doc_type, row_index, channel, dp)
+    except Exception as exc:
+        flash(f"Error: {exc}", "error")
+        return redirect(f"/?type={doc_type}&file={active_file}")
+
+    # For HTML/SMS, default to inline preview in-browser; DOCX is an
+    # attachment. A ?download=1 override forces attachment in every case.
+    as_attachment = (channel == "docx") or (request.args.get("download") == "1")
+    return send_file(
+        io.BytesIO(payload),
+        mimetype=mimetype,
+        as_attachment=as_attachment,
+        download_name=filename,
+    )
 
 
 @app.route("/generate-all")
@@ -936,13 +961,20 @@ STUDIO_UI = """<!DOCTYPE html>
           {% endfor %}
           {% if rows_count == 0 %}<option value="0">No data loaded</option>{% endif %}
         </select>
+        <label class="muted" for="preview-channel" style="margin-left:12px;">Channel:</label>
+        <select id="preview-channel">
+          <option value="pdf">PDF (Archive / Print / Fax)</option>
+          <option value="email">HTML Email (Secure Inbox)</option>
+          <option value="sms">SMS (plain text)</option>
+          <option value="docx">DOCX (File Exchange)</option>
+        </select>
         <a id="preview-link" class="btn btn-primary btn-sm" target="_blank" rel="noopener"
-           href="/generate?type={{ selected }}&row=0{% if active_file %}&file={{ active_file }}{% endif %}">
-           ⬇ Preview PDF
+           href="/generate?type={{ selected }}&row=0&channel=pdf{% if active_file %}&file={{ active_file }}{% endif %}">
+           ⬇ Preview
         </a>
         <span class="muted" style="font-size:12px;">
-          Tip: Save bindings first, then click Preview to see the output with the
-          current mapping applied.
+          Tip: Save bindings first, then preview. Each channel renders from the
+          same record + bindings but uses a channel-specific template.
         </span>
       </div>
     </div>
@@ -1426,16 +1458,28 @@ STUDIO_UI = """<!DOCTYPE html>
   });
   $("#diff-btn")    .addEventListener('click', doDiff);
 
-  // Preview link keeps the selected row.
+  // Preview link keeps the selected row + channel.
   const rowSel = $("#preview-row"), link = $("#preview-link");
+  const chanSel = $("#preview-channel");
   const fileParam = {{ active_file|tojson }};
+  const CHANNEL_LABELS = {
+    pdf: '⬇ Preview PDF',
+    email: '✉ Preview Email',
+    sms: '💬 Preview SMS',
+    docx: '⬇ Download DOCX',
+  };
   function updatePreviewLink() {
     const r = rowSel.value || "0";
-    let href = "/generate?type=" + encodeURIComponent(docType) + "&row=" + encodeURIComponent(r);
+    const c = chanSel.value || "pdf";
+    let href = "/generate?type=" + encodeURIComponent(docType)
+             + "&row=" + encodeURIComponent(r)
+             + "&channel=" + encodeURIComponent(c);
     if (fileParam) href += "&file=" + encodeURIComponent(fileParam);
     link.href = href;
+    link.textContent = CHANNEL_LABELS[c] || '⬇ Preview';
   }
   rowSel.addEventListener('change', updatePreviewLink);
+  chanSel.addEventListener('change', updatePreviewLink);
   updatePreviewLink();
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c =>

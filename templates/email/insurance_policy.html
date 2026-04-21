@@ -1,0 +1,52 @@
+{% extends "_base.html" %}
+{% block title %}Policy {{ policy_number }}{% endblock %}
+{% block preheader %}
+  Your {{ policy_type }} policy {{ policy_number }} is active through
+  {{ expiry_date }}. Sum assured {{ sum_assured | currency }}.
+{% endblock %}
+{% block header %}{{ policy_type | default('Insurance') }} Policy{% endblock %}
+{% block subheader %}
+  <p style="margin:6px 0 0;font-size:14px;line-height:1.4;color:#FFFFFF;opacity:.92;">
+    Policy {{ policy_number }} &middot; Effective {{ effective_date }}
+  </p>
+{% endblock %}
+{% block content %}
+  <p style="margin:0 0 16px;">Dear {{ insured_name }},</p>
+  <p style="margin:0 0 18px;">
+    Your <strong>{{ policy_type }}</strong> policy is in force. Key terms:
+  </p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="border-collapse:collapse;margin:0 0 22px;">
+    {% for label, value in [
+        ('Effective date', effective_date),
+        ('Expiry date',    expiry_date),
+        ('Sum assured',    sum_assured      | currency),
+        ('Premium',        (premium_amount  | currency) ~ ' / ' ~ premium_frequency),
+        ('Deductible',     deductible       | currency),
+    ] %}
+    <tr>
+      <th scope="row"
+          style="text-align:left;padding:8px 0;font-weight:500;
+                 color:#6B7280;border-bottom:1px solid #E5E7EB;font-size:14px;">
+        {{ label }}
+      </th>
+      <td style="text-align:right;padding:8px 0;
+                 border-bottom:1px solid #E5E7EB;font-size:15px;">
+        {{ value }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if coverages %}
+  <h2 style="margin:20px 0 8px;font-size:16px;color:#1E3A5F;">Coverage</h2>
+  <ul style="margin:0 0 18px;padding-left:20px;">
+    {% for c in coverages %}
+      <li style="margin:4px 0;">{{ c }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p style="margin:22px 0 0;font-size:14px;color:#6B7280;">
+    Questions? Contact your agent {{ agent_name | default('—') }}
+    ({{ agent_code | default('') }}).
+  </p>
+{% endblock %}
