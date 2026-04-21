@@ -213,6 +213,16 @@ def _expand_multi_paragraph_blocks(doc: _DocxDocument, context: dict) -> None:
     def top_level_paragraphs() -> list[_DocxParagraph]:
         return [_DocxParagraph(p, doc) for p in body.findall(qn("w:p"))]
 
+    def _net_delta(text: str) -> int:
+        """Net block-nesting contribution of a paragraph.
+
+        A paragraph may contain multiple start/end tags (e.g. a stray
+        ``{% endif %}{% for item in list %}`` that closes one block and
+        opens another). Return ``starts - ends`` so callers can tell a
+        net opener (>0), net closer (<0), or self-contained (==0) apart.
+        """
+        return len(_BLOCK_START_RE.findall(text)) - len(_BLOCK_END_RE.findall(text))
+
     # Each pass handles a single outermost block; re-scan after mutation to
     # stay in sync with newly-created paragraphs.
     safety = 0
@@ -222,27 +232,20 @@ def _expand_multi_paragraph_blocks(doc: _DocxDocument, context: dict) -> None:
         target: tuple[int, int] | None = None
         for i, p in enumerate(paragraphs):
             text = _para_text(p)
-            if not _BLOCK_START_RE.search(text):
+            # Only treat this paragraph as a multi-paragraph block opener
+            # when it has a *net* unclosed start — a paragraph like
+            # ``{% endif %}{% for item in list %}`` still opens a new
+            # span that must be expanded.
+            opening = _net_delta(text)
+            if opening <= 0:
                 continue
-            if _BLOCK_END_RE.search(text):
-                continue  # fully self-contained in one paragraph
-            depth = 1
+            depth = opening
             j = i + 1
             while j < len(paragraphs) and depth > 0:
                 tj = _para_text(paragraphs[j])
-                has_start = bool(_BLOCK_START_RE.search(tj))
-                has_end = bool(_BLOCK_END_RE.search(tj))
-                if has_start and has_end:
-                    # Self-contained inner block on a single paragraph
-                    # (e.g. ``{% if x.active %}…{% endif %}``) — neither opens
-                    # nor closes the outer span, so leave depth untouched.
-                    pass
-                elif has_start:
-                    depth += 1
-                elif has_end:
-                    depth -= 1
-                    if depth == 0:
-                        break
+                depth += _net_delta(tj)
+                if depth == 0:
+                    break
                 j += 1
             if j < len(paragraphs) and depth == 0:
                 target = (i, j)
