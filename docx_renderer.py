@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import io
 import logging
+import re
+from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
@@ -173,9 +175,101 @@ def _merge_table(table: _DocxTable, context: dict) -> None:
                 _merge_table(inner, context)
 
 
+# ── Multi-paragraph block expansion ───────────────────────────────────────────
+_BLOCK_START_RE = re.compile(r"{%\s*(for|if)\b")
+_BLOCK_END_RE   = re.compile(r"{%\s*end(for|if)\s*%}")
+
+
+def _para_text(p: _DocxParagraph) -> str:
+    return "".join(r.text or "" for r in p.runs)
+
+
+def _set_paragraph_text(p: _DocxParagraph, text: str) -> None:
+    runs = list(p.runs)
+    if runs:
+        runs[0].text = text
+        for r in runs[1:]:
+            r.text = ""
+    else:
+        p.add_run(text)
+
+
+def _expand_multi_paragraph_blocks(doc: _DocxDocument, context: dict) -> None:
+    """Render ``{% for %}…{% endfor %}`` (or ``if``) blocks that span multiple
+    paragraphs.
+
+    python-docx represents each visual line as a separate ``<w:p>`` element, so
+    a DOCX authored with the loop body on its own line cannot be rendered
+    paragraph-by-paragraph (the opening ``{% for %}`` tag on one paragraph and
+    the matching ``{% endfor %}`` on another are each invalid Jinja in
+    isolation). This pass detects such blocks, joins their text with newlines,
+    renders the whole span as one Jinja template, and splits the result back
+    into one paragraph per output line — cloning the formatting of the first
+    paragraph in the block so downstream PDF rendering preserves the author's
+    styling.
+    """
+    body = doc.element.body
+
+    def top_level_paragraphs() -> list[_DocxParagraph]:
+        return [_DocxParagraph(p, doc) for p in body.findall(qn("w:p"))]
+
+    # Each pass handles a single outermost block; re-scan after mutation to
+    # stay in sync with newly-created paragraphs.
+    safety = 0
+    while safety < 1000:
+        safety += 1
+        paragraphs = top_level_paragraphs()
+        target: tuple[int, int] | None = None
+        for i, p in enumerate(paragraphs):
+            text = _para_text(p)
+            if not _BLOCK_START_RE.search(text):
+                continue
+            if _BLOCK_END_RE.search(text):
+                continue  # fully self-contained in one paragraph
+            depth = 1
+            j = i + 1
+            while j < len(paragraphs) and depth > 0:
+                tj = _para_text(paragraphs[j])
+                if _BLOCK_START_RE.search(tj) and not _BLOCK_END_RE.search(tj):
+                    depth += 1
+                elif _BLOCK_END_RE.search(tj):
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if j < len(paragraphs) and depth == 0:
+                target = (i, j)
+                break
+        if target is None:
+            return
+
+        i, j = target
+        block = paragraphs[i:j + 1]
+        template_src = "\n".join(_para_text(bp) for bp in block)
+        rendered = _render_text(template_src, context)
+        # Collapse whitespace-only lines left behind by the for/endfor tags.
+        lines = [ln for ln in rendered.split("\n") if ln.strip() != ""]
+        if not lines:
+            lines = [""]
+
+        first = block[0]
+        _set_paragraph_text(first, lines[0])
+        anchor = first._element
+        for extra in lines[1:]:
+            clone = deepcopy(first._element)
+            anchor.addnext(clone)
+            anchor = clone
+            _set_paragraph_text(_DocxParagraph(clone, doc), extra)
+        for bp in block[1:]:
+            bp._element.getparent().remove(bp._element)
+
+    log.warning("multi-paragraph block expansion hit safety cap")
+
+
 def merge_docx(docx_path: str | Path, context: dict) -> _DocxDocument:
     """Load a DOCX template and substitute Jinja2 placeholders in-place."""
     doc = Document(str(docx_path))
+    _expand_multi_paragraph_blocks(doc, context)
     for para in doc.paragraphs:
         _merge_paragraph(para, context)
     for table in doc.tables:
