@@ -176,14 +176,33 @@ def load_records(doc_type: str,
     # workbook that contains the named sheet.
     list_joins: dict[str, dict] = {}
     if not path.endswith(".csv"):
+        # Snapshot available sheet names once so we can explicitly skip any
+        # list_source whose sheet is missing. This is necessary because
+        # `_read_excel_sheet` falls back to `wb.active` when the requested
+        # sheet is absent, which would silently join the main data rows as
+        # child rows.
+        try:
+            _probe_wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+            available_sheets = set(_probe_wb.sheetnames)
+            _probe_wb.close()
+        except Exception as exc:
+            log.debug("could not probe workbook sheets for %s: %s", path, exc)
+            available_sheets = set()
+
         for list_field, spec in (doc_schema.get("list_sources") or {}).items():
             sheet_name = spec.get("sheet")
             key = spec.get("key")
             if not sheet_name or not key:
                 continue
+            if sheet_name not in available_sheets:
+                log.debug(
+                    "list_source %s skipped: sheet %r not found in %s",
+                    list_field, sheet_name, path,
+                )
+                continue
             try:
                 child_rows = _read_excel_sheet(path, sheet_name)
-            except Exception as exc:  # sheet missing / unreadable -> skip
+            except Exception as exc:  # unreadable -> skip
                 log.debug("list_source %s skipped: %s", list_field, exc)
                 continue
             grouped: dict[str, list[dict]] = {}
