@@ -171,6 +171,19 @@ class TextRendererTests(unittest.TestCase):
         # Underline under the H1 heading.
         self.assertIn("=" * len("Savings Statement"), body)
 
+    def test_compact_stays_gsm7_for_default_row(self) -> None:
+        """Compact SMS body must be GSM-7-encodable so concatenated SMS
+        parts get the 153-septet budget rather than UCS-2's 67 code-unit
+        budget. A stray en-dash / em-dash / smart quote in the IR builder
+        forces the whole body to UCS-2 and roughly doubles cost.
+        """
+        from sms_renderer import encoding_of
+        body = render_text(self.doc, flavor="compact")
+        self.assertEqual(
+            encoding_of(body), "GSM-7",
+            f"Non-GSM-7 char leaked into compact SMS body: {body!r}",
+        )
+
 
 class EngineIntegrationTests(unittest.TestCase):
     """End-to-end through engine.generate_channel with the feature flag on."""

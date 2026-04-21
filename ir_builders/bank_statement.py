@@ -65,7 +65,10 @@ def build(context: dict) -> Document:
         role="header",
         heading=Heading(level=1, text=f"{acct_type} Statement"),
         blocks=(
-            para(f"{period_from} – {period_to}"),
+            # ASCII hyphen — not an en-dash — so the compact SMS text
+            # stays GSM-7-encodable (153-septet budget per concat part
+            # instead of UCS-2's 67 code-unit budget).
+            para(f"{period_from} - {period_to}"),
         ),
     )
 
