@@ -292,11 +292,12 @@ def _render_block(block, flavor: Flavor) -> str:
 
 # ── Document shells ──────────────────────────────────────────────────────────
 def _email_shell(doc: Document, body: str) -> str:
-    preheader = escape(
-        doc.metadata.get("preheader")
-        or f"{doc.title} — closing balance "
-           f"{doc.metadata.get('closing_balance', '')}".strip(" —")
+    closing = doc.metadata.get("closing_balance", "")
+    preheader_raw = doc.metadata.get("preheader") or (
+        f"{doc.title} — closing balance {closing}".strip()
+        if closing else doc.title
     )
+    preheader = escape(preheader_raw)
     body_style = _style({
         "margin": "0",
         "padding": "0",

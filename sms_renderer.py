@@ -213,6 +213,19 @@ def encoding_of(text: str) -> str:
 
 
 def segment_text(text: str, encoding: str | None = None) -> list[str]:
-    """Return prefixed segments for ``text`` (auto-detects encoding if ``None``)."""
-    result = segment_body(text)
-    return result["parts"]
+    """Return prefixed segments for ``text``.
+
+    ``encoding`` is either ``"GSM-7"``, ``"UCS-2"``, or ``None`` to auto-
+    detect. When a caller supplies an encoding explicitly we honour it —
+    forcing UCS-2 on a GSM-7-safe body is legitimate if the downstream
+    gateway doesn't support the GSM-7 extension alphabet, and silently
+    re-detecting would use the wrong per-part budget.
+    """
+    body = "\n".join(line.rstrip() for line in text.splitlines() if line.strip()).strip()
+    if encoding is None:
+        encoding = "GSM-7" if _is_gsm7(body) else "UCS-2"
+    elif encoding not in ("GSM-7", "UCS-2"):
+        raise ValueError(f"Unsupported encoding: {encoding!r}")
+    segs = _segment(body, encoding)
+    n = len(segs)
+    return [f"({i + 1}/{n}) {seg}" if n > 1 else seg for i, seg in enumerate(segs)]
