@@ -175,3 +175,44 @@ def render_sms_text(doc_type: str, context: dict) -> str:
     """Convenience wrapper: returns one string with each part on its own line."""
     result = render_sms(doc_type, context)
     return "\n".join(result["parts"])
+
+
+def segment_body(body: str) -> SMSResult:
+    """Encoding-detect + segment an already-rendered SMS ``body`` string.
+
+    Public entry-point for callers that build the SMS body outside the
+    Jinja template pipeline (e.g. the canonical IR renderer). Applies the
+    same GSM-7 / UCS-2 detection, 3GPP segmentation budgets, and 1-of-n
+    prefixing as :func:`render_sms`.
+    """
+    body = "\n".join(line.rstrip() for line in body.splitlines() if line.strip()).strip()
+
+    if _is_gsm7(body):
+        encoding = "GSM-7"
+        length = _gsm7_length(body)
+    else:
+        encoding = "UCS-2"
+        length = len(body.encode("utf-16-le")) // 2
+
+    segs = _segment(body, encoding)
+    n = len(segs)
+    prefixed = [f"({i + 1}/{n}) {seg}" if n > 1 else seg for i, seg in enumerate(segs)]
+
+    return {
+        "text": body,
+        "encoding": encoding,
+        "length": length,
+        "parts": prefixed,
+        "part_count": n,
+    }
+
+
+def encoding_of(text: str) -> str:
+    """Return ``"GSM-7"`` or ``"UCS-2"`` for ``text``."""
+    return "GSM-7" if _is_gsm7(text) else "UCS-2"
+
+
+def segment_text(text: str, encoding: str | None = None) -> list[str]:
+    """Return prefixed segments for ``text`` (auto-detects encoding if ``None``)."""
+    result = segment_body(text)
+    return result["parts"]

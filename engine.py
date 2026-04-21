@@ -26,8 +26,26 @@ from docx_renderer import (has_uploaded_template, render_docx_pdf,
                            uploaded_template_path)
 from template_studio import apply_bindings, load_bindings
 from email_renderer import render_email_html
-from sms_renderer   import render_sms
+from sms_renderer   import render_sms, segment_text, encoding_of
 from docx_exporter  import render_docx as render_docx_bytes
+
+# Canonical IR path. Importing ``ir_builders`` registers every builder
+# declared in ``ir_builders/__init__.py`` (currently bank_statement).
+import ir_builders
+from ir_renderers.html import render_html as ir_render_html
+from ir_renderers.text import render_text as ir_render_text
+
+
+def _use_ir(doc_type: str) -> bool:
+    """True if ``doc_type`` has both an ``use_ir: true`` schema flag and a
+    registered IR builder. Either alone is not sufficient — the flag without
+    a builder would 500; the builder without the flag stays opt-in.
+    """
+    try:
+        schema = get_doc_schema(doc_type)
+    except Exception:
+        return False
+    return bool(schema.get("use_ir")) and ir_builders.has_builder(doc_type)
 
 # Channels supported by ``generate_channel``.
 CHANNELS = ("pdf", "email", "sms", "docx")
@@ -197,11 +215,26 @@ def generate_channel(doc_type: str,
         else:
             payload = render_pdf(doc_type, context)
     elif channel == "email":
-        html = render_email_html(doc_type, context)
+        if _use_ir(doc_type):
+            # Canonical IR path: build once, render flavour.
+            doc = ir_builders.build(doc_type, context)
+            html = ir_render_html(doc, flavor="email")
+            extra["renderer"] = "ir"
+        else:
+            html = render_email_html(doc_type, context)
+            extra["renderer"] = "template"
         payload = html.encode("utf-8")
         extra["html"] = html
     elif channel == "sms":
-        sms = render_sms(doc_type, context)
+        if _use_ir(doc_type):
+            doc  = ir_builders.build(doc_type, context)
+            body = ir_render_text(doc, flavor="compact")
+            from sms_renderer import segment_body
+            sms = segment_body(body)
+            extra["renderer"] = "ir"
+        else:
+            sms = render_sms(doc_type, context)
+            extra["renderer"] = "template"
         # Each part on its own line so the delivered payload can be split
         # deterministically by the gateway.
         payload = "\n".join(sms["parts"]).encode("utf-8")
