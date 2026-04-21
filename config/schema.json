@@ -23,6 +23,9 @@
         "ifsc_code":         { "type": "string",   "required": false },
         "transactions":      { "type": "list",     "required": true  },
         "output_filename":   { "type": "string",   "required": false }
+      },
+      "list_sources": {
+        "transactions": { "sheet": "Transactions", "key": "account_number" }
       }
     },
 
