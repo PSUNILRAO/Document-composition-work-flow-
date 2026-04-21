@@ -83,23 +83,12 @@ def _gsm7_length(text: str) -> int:
     return sum(2 if ch in _GSM7_EXT else 1 for ch in text)
 
 
-def _segment(text: str, encoding: str) -> list[str]:
-    """Split ``text`` into segments without overrunning the per-part budget.
+def _split_to_budget(text: str, encoding: str, budget: int) -> list[str]:
+    """Split ``text`` into parts whose per-part length stays within ``budget``.
 
-    For GSM-7 we measure septets and are careful not to split so that an
-    extension pair ``['^']`` (2 septets) straddles a segment boundary.
-    For UCS-2 we measure UTF-16 code units and never split a surrogate pair.
+    GSM-7 extension pairs (2 septets) and UCS-2 surrogate pairs (2 code
+    units) are never split across a segment boundary.
     """
-    if encoding == "GSM-7":
-        single, concat = GSM7_SINGLE, GSM7_CONCAT
-        length = _gsm7_length(text)
-    else:
-        single, concat = UCS2_SINGLE, UCS2_CONCAT
-        length = len(text.encode("utf-16-le")) // 2  # code units
-
-    if length <= single:
-        return [text]
-
     parts: list[str] = []
     buf, buf_len = "", 0
     for ch in text:
@@ -108,13 +97,45 @@ def _segment(text: str, encoding: str) -> list[str]:
         else:
             # Non-BMP => surrogate pair (2 code units) and must not straddle
             step = 2 if ord(ch) > 0xFFFF else 1
-        if buf_len + step > concat:
+        if buf_len + step > budget:
             parts.append(buf)
             buf, buf_len = "", 0
         buf += ch
         buf_len += step
     if buf:
         parts.append(buf)
+    return parts
+
+
+def _segment(text: str, encoding: str) -> list[str]:
+    """Split ``text`` into segments, reserving room for the ``(i/n) `` prefix.
+
+    Returns un-prefixed segment bodies. The caller prepends ``(i/n) `` so
+    each delivered part stays within the protocol budget
+    (160 / 153 septets for GSM-7; 70 / 67 code units for UCS-2).
+    """
+    if encoding == "GSM-7":
+        single, concat = GSM7_SINGLE, GSM7_CONCAT
+        length = _gsm7_length(text)
+    else:
+        single, concat = UCS2_SINGLE, UCS2_CONCAT
+        length = len(text.encode("utf-16-le")) // 2
+
+    if length <= single:
+        return [text]
+
+    # First pass: segment with the full concat budget to estimate ``n``.
+    # Then reserve the ``(i/n) `` prefix width out of the per-part budget
+    # and re-segment. Re-estimate at most a few times in case reserving
+    # the prefix pushes ``n`` into a wider digit bucket.
+    parts = _split_to_budget(text, encoding, concat)
+    for _ in range(3):
+        n = len(parts)
+        prefix_len = len(f"({n}/{n}) ")
+        new_parts = _split_to_budget(text, encoding, concat - prefix_len)
+        if len(new_parts) == n:
+            return new_parts
+        parts = new_parts
     return parts
 
 

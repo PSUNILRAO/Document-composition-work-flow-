@@ -174,7 +174,13 @@ def generate_channel(doc_type: str,
 
     record  = load_record(doc_type, row_index, data_path)
     context = apply_rules(doc_type, record)
-    if has_uploaded_template(doc_type):
+
+    # Template Studio bindings target DOCX *placeholder names* — they're
+    # only meaningful for channels that render from the uploaded DOCX
+    # (pdf via docx_renderer, docx via docxtpl). Applying them to the
+    # email/SMS context would silently overwrite rule-computed values
+    # whenever a placeholder name collides with a context key.
+    if channel in ("pdf", "docx") and has_uploaded_template(doc_type):
         context = apply_bindings(context, load_bindings(doc_type))
 
     meta    = CHANNEL_META[channel]
