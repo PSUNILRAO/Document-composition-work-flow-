@@ -109,9 +109,13 @@ def _inner_field_names(body: list, loop_var: str) -> list[str]:
     return seen
 
 
-def extract_placeholders(doc_type: str) -> dict[str, Any]:
-    """Return a structured description of every placeholder in the uploaded
-    DOCX template for ``doc_type``.
+def extract_placeholders(doc_type: str, docx_path: Path | None = None) -> dict[str, Any]:
+    """Return a structured description of every placeholder in a DOCX template.
+
+    By default looks up the currently-published DOCX for ``doc_type``
+    (``uploaded_template_path(doc_type)``). Pass ``docx_path`` explicitly to
+    extract placeholders from an arbitrary version's DOCX (used by the Studio
+    version picker).
 
     Return shape::
 
@@ -128,12 +132,12 @@ def extract_placeholders(doc_type: str) -> dict[str, Any]:
           "parse_error": None,   # or a string if the DOCX is not parseable
         }
 
-    Raises ``FileNotFoundError`` if no template is uploaded for ``doc_type``.
+    Raises ``FileNotFoundError`` if no DOCX is present at the resolved path.
     """
 
-    path = uploaded_template_path(doc_type)
+    path = docx_path if docx_path is not None else uploaded_template_path(doc_type)
     if not path.is_file():
-        raise FileNotFoundError(f"No DOCX template uploaded for {doc_type!r}.")
+        raise FileNotFoundError(f"No DOCX template found at {path}.")
 
     result: dict[str, Any] = {
         "template_name": path.name,
@@ -269,12 +273,8 @@ def load_bindings(doc_type: str) -> dict[str, Any]:
     return manifest
 
 
-def save_bindings(doc_type: str, manifest: dict[str, Any]) -> dict[str, Any]:
-    """Persist a binding manifest. Returns the normalised manifest as saved."""
-    path = _safe_bindings_path(doc_type)
-    if path is None:
-        raise ValueError(f"Invalid doc_type for bindings path: {doc_type!r}")
-
+def normalise_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Strip junk/empty entries and enforce types on a bindings manifest."""
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be a dict")
 
@@ -302,7 +302,16 @@ def save_bindings(doc_type: str, manifest: dict[str, Any]) -> dict[str, Any]:
                 "source":    source,
                 "field_map": cleaned_map,
             }
+    return normalised
 
+
+def save_bindings(doc_type: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Persist a binding manifest. Returns the normalised manifest as saved."""
+    path = _safe_bindings_path(doc_type)
+    if path is None:
+        raise ValueError(f"Invalid doc_type for bindings path: {doc_type!r}")
+
+    normalised = normalise_manifest(manifest)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(normalised, f, indent=2, sort_keys=True)

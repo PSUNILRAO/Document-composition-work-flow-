@@ -22,7 +22,9 @@ from engine import (generate_one, generate_batch, get_preview_rows,
 from docx_renderer import (UPLOAD_TEMPLATES_DIR, has_uploaded_template,
                            remove_uploaded_template, uploaded_template_path)
 from template_studio import (bindings_exist, extract_placeholders,
-                             load_bindings, remove_bindings, save_bindings)
+                             load_bindings, normalise_manifest,
+                             remove_bindings, save_bindings)
+import template_versions as tv
 
 log = logging.getLogger(__name__)
 
@@ -524,10 +526,15 @@ def _safe_active_file(active_file: str) -> str:
 
 @app.route("/upload-template", methods=["POST"])
 def upload_template():
-    """Accept a .docx template for the selected doc_type and store it under
-    uploads/templates/<doc_type>.docx. Subsequent /generate calls will use this
-    DOCX template (with Jinja2 placeholder substitution) instead of the
-    built-in HTML template."""
+    """Accept a .docx template for the selected doc_type and persist it via
+    the template-versioning layer.
+
+    - First-ever upload for a doc_type auto-publishes as v1 (so rendering
+      works out of the box).
+    - Subsequent uploads land as draft ``v<N+1>`` and do NOT affect the
+      currently-published template until explicitly published via the
+      Template Studio.
+    """
     doc_type    = request.args.get("type", "")
     active_file = _safe_active_file(request.args.get("file", ""))
     if doc_type not in DOC_LABELS:
@@ -544,13 +551,33 @@ def upload_template():
     if not f.filename.lower().endswith(".docx"):
         flash("Only .docx files accepted for templates.", "error")
         return redirect(f"/?type={doc_type}&file={active_file}")
-    dest = uploaded_template_path(doc_type)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    f.save(str(dest))
-    flash(
-        f"Uploaded DOCX template '{display_name}' for {DOC_LABELS[doc_type]}.",
-        "success",
-    )
+
+    data = f.read()
+    try:
+        entry = tv.add_version_from_bytes(
+            doc_type,
+            data,
+            template_name=display_name,
+            uploaded_by="web",
+            notes="",
+        )
+    except tv.VersionError as exc:
+        flash(f"Could not store template: {exc}", "error")
+        return redirect(f"/?type={doc_type}&file={active_file}")
+
+    if entry["status"] == tv.STATE_PUBLISHED:
+        flash(
+            f"Uploaded DOCX '{display_name}' — published as v{entry['version']} "
+            f"for {DOC_LABELS[doc_type]}.",
+            "success",
+        )
+    else:
+        flash(
+            f"Uploaded DOCX '{display_name}' as draft v{entry['version']} for "
+            f"{DOC_LABELS[doc_type]}. Open the Template Studio to review and "
+            f"publish.",
+            "info",
+        )
     return redirect(f"/?type={doc_type}&file={active_file}")
 
 
@@ -561,8 +588,24 @@ def reset_template():
     if doc_type not in DOC_LABELS:
         flash(f"Unknown document type '{doc_type}'.", "error")
         return redirect("/")
-    if remove_uploaded_template(doc_type):
-        flash("Reverted to built-in HTML template.", "success")
+
+    removed_flat = remove_uploaded_template(doc_type)
+
+    # Wipe the versioning directory too so the next upload bootstraps cleanly
+    # as v1/published. This avoids a confusing mid-state where versions.json
+    # references DOCX files the flat runtime no longer has.
+    removed_versions = False
+    try:
+        import shutil
+        v_dir = tv.versions_dir(doc_type)
+        if v_dir.exists():
+            shutil.rmtree(v_dir)
+            removed_versions = True
+    except tv.VersionError:
+        pass
+
+    if removed_flat or removed_versions:
+        flash("Reverted to built-in HTML template (versions cleared).", "success")
     else:
         flash("No uploaded DOCX template to remove.", "info")
     return redirect(f"/?type={doc_type}&file={active_file}")
@@ -757,6 +800,30 @@ STUDIO_UI = """<!DOCTYPE html>
   .status-dot.dirty { background:var(--warn); }
 
   .empty { padding:24px; text-align:center; color:var(--muted); font-size:13px; }
+
+  /* Version picker + status */
+  .ver-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .ver-bar select { border:1px solid var(--border); border-radius:6px;
+                    padding:5px 10px; font-size:13px; background:var(--surface);
+                    font-family:var(--sans); min-width:180px; }
+  .badge { display:inline-block; padding:3px 10px; font-size:11px;
+           font-weight:700; letter-spacing:.3px; text-transform:uppercase;
+           border-radius:12px; border:1px solid transparent; font-family:var(--sans); }
+  .badge.draft     { background:#EFF6FF; color:#0550AE; border-color:#B6E3FF; }
+  .badge.in_review { background:var(--warn-bg); color:var(--warn); border-color:#F1E05A; }
+  .badge.approved  { background:#F0F9EC; color:#2A6F2A; border-color:#ACEEBB; }
+  .badge.published { background:var(--success-bg); color:var(--success); border-color:#ACEEBB; }
+  .badge.rejected  { background:var(--danger-bg); color:var(--danger); border-color:#FFCECB; }
+  .badge.archived  { background:#F4F4F5; color:var(--muted); border-color:var(--border); }
+
+  .diff-table { width:100%; border-collapse:collapse; font-size:12px;
+                font-family:var(--mono); margin-top:8px; }
+  .diff-table th, .diff-table td { padding:6px 10px; border:1px solid var(--border);
+                                   text-align:left; vertical-align:top; }
+  .diff-table th { background:var(--paper); font-weight:600; }
+  .diff-added   { color:var(--success); }
+  .diff-removed { color:var(--danger); }
+  .diff-common  { color:var(--muted); }
 </style>
 </head>
 <body>
@@ -808,6 +875,47 @@ STUDIO_UI = """<!DOCTYPE html>
       </div>
     </div>
   {% else %}
+
+    <!-- Version management -->
+    <div class="card">
+      <div class="card-head">
+        <span>TEMPLATE VERSIONS</span>
+        <span class="muted" style="font-size:12px;">
+          Draft → In Review → Approved → Published · one published version per doc type
+        </span>
+      </div>
+      <div class="card-body">
+        <div class="ver-bar" id="ver-bar">
+          <label class="muted" for="ver-select" style="font-size:12px;">Viewing:</label>
+          <select id="ver-select"></select>
+          <span id="ver-badge" class="badge draft">—</span>
+          <span class="muted" id="ver-meta" style="font-size:12px;"></span>
+          <span style="flex:1 1 auto;"></span>
+          <form method="POST" enctype="multipart/form-data" id="upload-new-form"
+                action="/upload-template?type={{ selected }}{% if active_file %}&file={{ active_file }}{% endif %}"
+                style="display:flex;gap:6px;align-items:center;">
+            <label class="btn btn-outline btn-sm" for="docxfile-new" style="cursor:pointer;">
+              ⬆ Upload new version
+              <input type="file" name="docxfile" id="docxfile-new"
+                     accept=".docx" style="display:none;" required>
+            </label>
+          </form>
+        </div>
+        <div class="ver-bar" id="ver-actions" style="margin-top:12px;">
+          <button id="act-submit"   class="btn btn-outline btn-sm" disabled>Submit for review</button>
+          <button id="act-approve"  class="btn btn-outline btn-sm" disabled>Approve</button>
+          <button id="act-reject"   class="btn btn-outline btn-sm" disabled>Reject</button>
+          <button id="act-publish"  class="btn btn-primary btn-sm" disabled>Publish</button>
+          <button id="act-draft"    class="btn btn-outline btn-sm" disabled title="Move back to draft">↶ Back to draft</button>
+          <button id="act-rollback" class="btn btn-outline btn-sm" disabled title="Re-publish previous version">↺ Rollback</button>
+          <span style="flex:1 1 auto;"></span>
+          <label class="muted" for="diff-against" style="font-size:12px;">Compare with:</label>
+          <select id="diff-against"></select>
+          <button id="diff-btn" class="btn btn-outline btn-sm">Compare</button>
+        </div>
+        <div id="diff-panel" style="display:none; margin-top:14px;"></div>
+      </div>
+    </div>
 
     <!-- Preview + actions bar -->
     <div class="card">
@@ -893,6 +1001,8 @@ STUDIO_UI = """<!DOCTYPE html>
     fields: { scalar_fields: [], list_fields: [] },
     bindings: { scalars: {}, repeating: {} },
     saved: JSON.stringify({ scalars: {}, repeating: {} }),
+    versions: { versions: [], published: null, latest: 0 },
+    currentVersion: null,  // null until /api/studio/versions resolves
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -904,6 +1014,22 @@ STUDIO_UI = """<!DOCTYPE html>
   const saveBtn = $("#save-btn");
   const resetBtn = $("#reset-btn");
   const clearAllBtn = $("#clear-all-btn");
+  const verSelect = $("#ver-select");
+  const verBadge  = $("#ver-badge");
+  const verMeta   = $("#ver-meta");
+  const diffAgainst = $("#diff-against");
+  const diffPanel = $("#diff-panel");
+  const uploadForm = $("#upload-new-form");
+  const uploadInput = $("#docxfile-new");
+
+  function versionQS() {
+    let qs = "?type=" + encodeURIComponent(docType);
+    if (state.currentVersion) qs += "&version=" + encodeURIComponent(state.currentVersion);
+    return qs;
+  }
+  function currentVersionEntry() {
+    return (state.versions.versions || []).find(v => v.version === state.currentVersion) || null;
+  }
 
   function setStatus(kind, label) {
     statusDot.className = "status-dot " + (kind || "");
@@ -937,14 +1063,15 @@ STUDIO_UI = """<!DOCTYPE html>
   }
 
   async function load() {
-    const qs = "?type=" + encodeURIComponent(docType);
+    const baseQS = "?type=" + encodeURIComponent(docType);
+    const verQS  = versionQS();
     const fileParam = {{ active_file|tojson }};
     const fqs = fileParam ? ("&file=" + encodeURIComponent(fileParam)) : "";
     try {
       const [ph, fi, bi] = await Promise.all([
-        fetch("/api/studio/placeholders" + qs).then(r => r.json()),
-        fetch("/api/studio/fields" + qs + fqs).then(r => r.json()),
-        fetch("/api/studio/bindings" + qs).then(r => r.json()),
+        fetch("/api/studio/placeholders" + verQS).then(r => r.json()),
+        fetch("/api/studio/fields"       + baseQS + fqs).then(r => r.json()),
+        fetch("/api/studio/bindings"     + verQS).then(r => r.json()),
       ]);
       state.placeholders = ph;
       state.fields = fi;
@@ -955,6 +1082,148 @@ STUDIO_UI = """<!DOCTYPE html>
     } catch (e) {
       setStatus("dirty", "Error: " + e.message);
     }
+  }
+
+  async function loadVersions(preferVersion) {
+    const qs = "?type=" + encodeURIComponent(docType);
+    try {
+      const idx = await fetch("/api/studio/versions" + qs).then(r => r.json());
+      state.versions = idx;
+      // Pick the version to show: caller override → published → latest.
+      const list = idx.versions || [];
+      let pick = null;
+      if (preferVersion && list.some(v => v.version === preferVersion)) pick = preferVersion;
+      else if (idx.published) pick = idx.published;
+      else if (list.length) pick = list[list.length - 1].version;
+      state.currentVersion = pick;
+      renderVersions();
+      return idx;
+    } catch (e) {
+      setStatus("dirty", "Could not load versions: " + e.message);
+      return null;
+    }
+  }
+
+  function renderVersions() {
+    const list = state.versions.versions || [];
+    // Build the main select.
+    verSelect.innerHTML = list.slice().reverse().map(v => {
+      const label = "v" + v.version + " · " + v.status
+                  + (v.version === state.versions.published ? " ★" : "");
+      const sel = (v.version === state.currentVersion) ? "selected" : "";
+      return '<option value="' + v.version + '" ' + sel + '>'
+           + escapeHtml(label) + '</option>';
+    }).join("");
+    diffAgainst.innerHTML = list.slice().reverse().map(v => {
+      const sel = (v.version !== state.currentVersion && v.version === state.versions.published) ? "selected" : "";
+      return '<option value="' + v.version + '" ' + sel + '>v' + v.version + ' · ' + escapeHtml(v.status) + '</option>';
+    }).join("");
+
+    const cur = currentVersionEntry();
+    if (cur) {
+      verBadge.className = "badge " + cur.status;
+      verBadge.textContent = cur.status.replace("_", " ");
+      const who = cur.uploaded_by ? (" · by " + cur.uploaded_by) : "";
+      verMeta.textContent = "created " + cur.created_at + who;
+    } else {
+      verBadge.className = "badge draft";
+      verBadge.textContent = "—";
+      verMeta.textContent = "";
+    }
+    updateActionButtons();
+  }
+
+  function updateActionButtons() {
+    const cur = currentVersionEntry();
+    const st  = cur ? cur.status : null;
+    const isPub = !!state.versions.published;
+    // Transitions
+    $("#act-submit").disabled    = (st !== "draft");
+    $("#act-approve").disabled   = (st !== "in_review");
+    $("#act-reject").disabled    = (st !== "draft" && st !== "in_review");
+    $("#act-publish").disabled   = (st !== "approved");
+    $("#act-draft").disabled     = !(st === "in_review" || st === "approved" || st === "rejected");
+    // Rollback — always based on overall index state, not the viewed version.
+    const archivedPrev = (state.versions.versions || []).some(v =>
+      v.status === "archived" &&
+      (v.history || []).some(h => h.to === "published"));
+    $("#act-rollback").disabled = !(isPub && archivedPrev);
+  }
+
+  async function doTransition(to) {
+    if (!state.currentVersion) return;
+    const res = await fetch("/api/studio/versions/" + state.currentVersion
+                 + "/transition?type=" + encodeURIComponent(docType), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to })
+    });
+    if (!res.ok) { alert(await res.text()); return; }
+    await loadVersions(state.currentVersion);
+    await load();
+  }
+
+  async function doPublish() {
+    if (!state.currentVersion) return;
+    const res = await fetch("/api/studio/versions/" + state.currentVersion
+                 + "/publish?type=" + encodeURIComponent(docType), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+    });
+    if (!res.ok) { alert(await res.text()); return; }
+    await loadVersions(state.currentVersion);
+    await load();
+  }
+
+  async function doRollback() {
+    const res = await fetch("/api/studio/versions/rollback?type="
+                 + encodeURIComponent(docType), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+    });
+    if (!res.ok) { alert(await res.text()); return; }
+    // Switch view to the now-published version so the user sees the change.
+    const idx = await loadVersions();
+    if (idx && idx.published) {
+      state.currentVersion = idx.published;
+      renderVersions();
+    }
+    await load();
+  }
+
+  async function doDiff() {
+    const against = parseInt(diffAgainst.value, 10);
+    if (!state.currentVersion || !against) return;
+    const res = await fetch("/api/studio/versions/" + state.currentVersion
+                 + "/diff?type=" + encodeURIComponent(docType)
+                 + "&against=" + against);
+    if (!res.ok) { alert(await res.text()); return; }
+    const d = await res.json();
+    renderDiff(d);
+  }
+
+  function renderDiff(d) {
+    const section = (title, payload) => {
+      const parts = [];
+      if (payload.added && payload.added.length)
+        parts.push('<span class="diff-added">+ ' + payload.added.map(escapeHtml).join(", ") + '</span>');
+      if (payload.removed && payload.removed.length)
+        parts.push('<span class="diff-removed">− ' + payload.removed.map(escapeHtml).join(", ") + '</span>');
+      if (payload.changed && payload.changed.length)
+        parts.push('<span class="diff-added">~ ' + payload.changed.map(escapeHtml).join(", ") + '</span>');
+      if (payload.common && payload.common.length)
+        parts.push('<span class="diff-common">= ' + payload.common.map(escapeHtml).join(", ") + '</span>');
+      return '<tr><th>' + escapeHtml(title) + '</th><td>'
+           + (parts.join("<br>") || '<span class="diff-common">(no change)</span>')
+           + '</td></tr>';
+    };
+    diffPanel.innerHTML =
+      '<table class="diff-table"><thead><tr>'
+      + '<th style="width:220px;">Comparing v' + d.a + ' → v' + d.b + '</th>'
+      + '<th>Differences (+ added, − removed, ~ changed, = common)</th></tr></thead><tbody>'
+      + section("Scalar placeholders",    d.scalar_placeholders)
+      + section("Repeating sections",     d.repeating_sections)
+      + section("Bindings (scalars)",     d.bindings_scalars)
+      + section("Bindings (repeating)",   d.bindings_repeating)
+      + '</tbody></table>';
+    diffPanel.style.display = "block";
   }
 
   function renderAll() {
@@ -1099,9 +1368,18 @@ STUDIO_UI = """<!DOCTYPE html>
   }
 
   async function save() {
+    const cur = currentVersionEntry();
+    const latest = state.versions.latest || 0;
+    const editable = cur && (cur.status === "draft"
+                      || (cur.status === "published" && cur.version === latest));
+    if (cur && !editable) {
+      alert("Bindings are read-only on v" + cur.version + " (status '"
+            + cur.status + "'). Move it back to draft or upload a new version.");
+      return;
+    }
     setStatus("", "Saving…"); saveBtn.disabled = true;
     try {
-      const res = await fetch("/api/studio/bindings?type=" + encodeURIComponent(docType), {
+      const res = await fetch("/api/studio/bindings" + versionQS(), {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(sanitise(state.bindings)),
       });
@@ -1127,6 +1405,27 @@ STUDIO_UI = """<!DOCTYPE html>
   resetBtn.addEventListener('click', load);
   clearAllBtn.addEventListener('click', clearSaved);
 
+  // ── Version UI event wiring ───────────────────────────────────────────────
+  verSelect.addEventListener('change', async () => {
+    state.currentVersion = parseInt(verSelect.value, 10);
+    renderVersions();
+    await load();
+  });
+  uploadInput.addEventListener('change', () => {
+    if (uploadInput.files && uploadInput.files.length) uploadForm.submit();
+  });
+  $("#act-submit")  .addEventListener('click', () => doTransition("in_review"));
+  $("#act-approve") .addEventListener('click', () => doTransition("approved"));
+  $("#act-reject")  .addEventListener('click', () => doTransition("rejected"));
+  $("#act-draft")   .addEventListener('click', () => doTransition("draft"));
+  $("#act-publish") .addEventListener('click', doPublish);
+  $("#act-rollback").addEventListener('click', async () => {
+    if (!confirm("Rollback: archive the currently-published version and "
+               + "re-publish the previous one?")) return;
+    await doRollback();
+  });
+  $("#diff-btn")    .addEventListener('click', doDiff);
+
   // Preview link keeps the selected row.
   const rowSel = $("#preview-row"), link = $("#preview-link");
   const fileParam = {{ active_file|tojson }};
@@ -1143,7 +1442,10 @@ STUDIO_UI = """<!DOCTYPE html>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function escapeAttr(s) { return escapeHtml(s); }
 
-  load();
+  (async () => {
+    await loadVersions();
+    await load();
+  })();
 })();
 </script>
 </body></html>"""
@@ -1185,9 +1487,42 @@ def _require_doc_type() -> str:
     return doc_type
 
 
+def _optional_version_arg() -> int | None:
+    """Parse an optional ``?version=<int>`` param. Returns None if absent."""
+    raw = request.args.get("version")
+    if raw is None or raw == "":
+        return None
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        abort(400, description="Invalid version number.")
+    if val < 1:
+        abort(400, description="Version must be >= 1.")
+    return val
+
+
 @app.route("/api/studio/placeholders")
 def api_studio_placeholders():
     doc_type = _require_doc_type()
+    version  = _optional_version_arg()
+
+    if version is not None:
+        docx_path = tv.version_docx_path(doc_type, version)
+        if not docx_path.is_file():
+            return jsonify({
+                "template_name": "",
+                "scalar_placeholders": [],
+                "repeating_sections": [],
+                "parse_error": f"No DOCX stored for v{version}.",
+            })
+        try:
+            return jsonify(extract_placeholders(doc_type, docx_path=docx_path))
+        except FileNotFoundError as exc:
+            return jsonify({
+                "template_name": "", "scalar_placeholders": [],
+                "repeating_sections": [], "parse_error": str(exc),
+            })
+
     if not has_uploaded_template(doc_type):
         return jsonify({
             "template_name": "",
@@ -1275,15 +1610,38 @@ def api_studio_fields():
 @app.route("/api/studio/bindings", methods=["GET"])
 def api_studio_bindings_get():
     doc_type = _require_doc_type()
+    version  = _optional_version_arg()
+    if version is not None:
+        return jsonify(tv.read_version_bindings(doc_type, version))
     return jsonify(load_bindings(doc_type))
 
 
 @app.route("/api/studio/bindings", methods=["POST"])
 def api_studio_bindings_post():
     doc_type = _require_doc_type()
-    payload = request.get_json(silent=True)
+    version  = _optional_version_arg()
+    payload  = request.get_json(silent=True)
     if not isinstance(payload, dict):
         abort(400, description="Body must be a JSON object.")
+
+    if version is not None:
+        # Validate + normalise first using the same machinery as the flat
+        # path (save_bindings does validation + normalisation), but without
+        # touching the flat file — we only want to mirror when this version
+        # is the currently-published one.
+        try:
+            normalised = normalise_manifest(payload)
+            tv.set_version_bindings(doc_type, version, normalised)
+        except tv.VersionError as exc:
+            abort(400, description=str(exc))
+        except ValueError as exc:
+            abort(400, description=str(exc))
+        idx = tv.list_versions(doc_type)
+        if idx["published"] == version:
+            # Keep the flat mirror in sync so /generate picks up the changes.
+            save_bindings(doc_type, normalised)
+        return jsonify(normalised)
+
     try:
         saved = save_bindings(doc_type, payload)
     except ValueError as exc:
@@ -1296,6 +1654,65 @@ def api_studio_bindings_delete():
     doc_type = _require_doc_type()
     removed = remove_bindings(doc_type)
     return jsonify({"removed": removed})
+
+
+# ── Version-management APIs ───────────────────────────────────────────────────
+@app.route("/api/studio/versions", methods=["GET"])
+def api_studio_versions_list():
+    doc_type = _require_doc_type()
+    return jsonify(tv.list_versions(doc_type))
+
+
+@app.route("/api/studio/versions/<int:version>/transition", methods=["POST"])
+def api_studio_version_transition(version: int):
+    doc_type = _require_doc_type()
+    payload  = request.get_json(silent=True) or {}
+    target   = str(payload.get("to") or "").strip()
+    by       = str(payload.get("by") or "web")
+    if not target:
+        abort(400, description="Missing 'to' in body.")
+    try:
+        entry = tv.transition_status(doc_type, version, target, by=by)
+    except tv.VersionError as exc:
+        abort(400, description=str(exc))
+    return jsonify(entry)
+
+
+@app.route("/api/studio/versions/<int:version>/publish", methods=["POST"])
+def api_studio_version_publish(version: int):
+    doc_type = _require_doc_type()
+    payload  = request.get_json(silent=True) or {}
+    by       = str(payload.get("by") or "web")
+    try:
+        entry = tv.publish_version(doc_type, version, by=by)
+    except tv.VersionError as exc:
+        abort(400, description=str(exc))
+    return jsonify(entry)
+
+
+@app.route("/api/studio/versions/rollback", methods=["POST"])
+def api_studio_version_rollback():
+    doc_type = _require_doc_type()
+    payload  = request.get_json(silent=True) or {}
+    by       = str(payload.get("by") or "web")
+    try:
+        entry = tv.rollback_published(doc_type, by=by)
+    except tv.VersionError as exc:
+        abort(400, description=str(exc))
+    return jsonify(entry)
+
+
+@app.route("/api/studio/versions/<int:version>/diff", methods=["GET"])
+def api_studio_version_diff(version: int):
+    doc_type = _require_doc_type()
+    raw_against = request.args.get("against", "")
+    try:
+        against = int(raw_against)
+    except (TypeError, ValueError):
+        abort(400, description="Missing or invalid 'against' query parameter.")
+    if against < 1 or version < 1:
+        abort(400, description="Version numbers must be >= 1.")
+    return jsonify(tv.diff_versions(doc_type, version, against))
 
 
 @app.route("/batch-status")
